@@ -313,6 +313,17 @@ function _popat_expr(N::Int)
     end
 end
 
+## filter
+Base.filter(f, ::List{Nil,Nil}) = EMPTY_LIST
+@inline function Base.filter(f, @nospecialize(lst::List))
+    fst = first(lst)
+    if f(fst)
+        return _List(fst, filter(f, tail(lst)))
+    else
+        return filter(f, tail(lst))
+    end
+end
+
 ## findfirst
 function Base.findfirst(f::Function, @nospecialize(lst::List))
     n = find_first(f, lst)
@@ -430,8 +441,8 @@ function _setindex_expr(N::Int)
 end
 
 # TODO map(::KeyedList)
-Base.map(f, @nospecialize(lst::OneItem)) = list(f(first(lst)))
-@inline Base.map(f, @nospecialize(lst::List)) = list(f(first(lst)), map(f, tail(lst)))
+Base.map(f, @nospecialize(lst::OneItem)) = List(f(first(lst)))
+@inline Base.map(f, @nospecialize(lst::List)) = _List(f(first(lst)), map(f, tail(lst)))
 
 @inline function Base.in(x, @nospecialize(lst::List))
     if x == first(lst)

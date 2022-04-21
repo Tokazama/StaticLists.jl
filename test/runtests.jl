@@ -7,6 +7,7 @@ using Test
 
 lst = List(static(1), static(2), static(3), static(4))
 @test values(lst) == lst
+@test @inferred(filter(isodd, lst)) == List(static(1), static(3))
 @test @inferred(length(lst)) == 4
 @test @inferred(ArrayInterface.known_length(lst)) == 4
 @test @inferred(first(lst)) == 1
@@ -15,8 +16,11 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(front(lst)) == List(static(1), static(2), static(3))
 @test @inferred(eltype(lst)) <: StaticInt
 @test isempty(@inferred(empty(lst)))
+@test !isempty(lst)
+@test @inferred(ArrayInterface.known_first(lst)) === static(1)
 
 lst = List(1, 2, 3, 4)
+@test @inferred(ArrayInterface.known_first(lst)) === nothing
 @test @inferred(in(4, lst))
 @test @inferred(in(5, lst)) === false
 @test @inferred(Base.setindex(lst, 6, 3)) == List(1, 2, 6, 4)
@@ -29,6 +33,12 @@ lst = List(1, 2, 3, 4)
 @test @inferred(popfirst(lst)) == (1, List(2, 3, 4))
 @test @inferred(popat(lst, 3)) == (3, List(1, 2, 4))
 @test @inferred(popat(lst, static(3))) == (3, List(1, 2, 4))
+@test @inferred(map(i -> i + 1, lst)) == List(2, 3, 4, 5)
+inds = keys(lst)
+for (i,l) in zip(inds,lst)
+    @test i == l
+end
+
 
 @testset "StaticLists.jl" begin
     # Write your tests here.
