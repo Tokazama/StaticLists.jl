@@ -39,7 +39,12 @@ for (i,l) in zip(inds,lst)
     @test i == l
 end
 
-
-@testset "StaticLists.jl" begin
-    # Write your tests here.
-end
+kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 3, 4))
+@test @inferred(keytype(kl)) <: StaticSymbol
+@test @inferred(valtype(kl)) <: Int
+@test @inferred(length(kl)) == 4
+@test @inferred(first(kl)) == Pair(static(:a), 1)
+@test @inferred(last(kl)) == Pair(static(:d), 4)
+@test @inferred(values(kl)) == List(1, 2, 3, 4)
+@test @inferred(keys(kl)) == List(:a, :b, :c, :d)
+@test @inferred(kl[static(:b)]) == 2

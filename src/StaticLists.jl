@@ -1,7 +1,7 @@
 module StaticLists
 
 using ArrayInterface
-using ArrayInterface: known_first, known_last, known_length
+using ArrayInterface: known_first, known_length
 import ArrayInterface: static_length as slength
 using Base: front, tail
 using Static
@@ -76,18 +76,20 @@ end
     _KeyedList(tuple_to_list(static(keys(v))), tuple_to_list(values(v)))
 end
 
+Base.haskey(@nospecialize(kl::KeyedList), key) = in(key, keys(kl))
+
 Base.eltype(@nospecialize lst::List) = eltype(typeof(lst))
 Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
 @generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:List})) where {N}
     if N === 0
         return :Any
     elseif N === 1
-        return :(_first_type(T))
+        return :(first_type(T))
     else
-        out = :(_first_type(T))
+        out = :(first_type(T))
         t = :(tail_type(T))
         for _ in 1:(N-1)
-            out = Expr(:call, :typejoin, out, :(_first_type($(t))))
+            out = Expr(:call, :typejoin, out, :(first_type($(t))))
             t = :(tail_type($(t)))
         end
         return out
@@ -95,18 +97,29 @@ Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
 end
 
 @assume_effects :total _first_type(T::DataType) = @inbounds(T.parameters[1])
+first_type(@nospecialize lst::List) = first_type(typeof(lst))
+first_type(@nospecialize T::Type{<:List}) = _first_type(T)
+
 @assume_effects :total _tail_type(T::DataType) = @inbounds(T.parameters[2])
 tail_type(@nospecialize lst::List) = tail_type(typeof(lst))
 tail_type(@nospecialize T::Type{<:List}) = _tail_type(T)
 
+@assume_effects :total _keys_type(T::DataType) = @inbounds(T.parameters[1])
+keys_type(@nospecialize kl::KeyedList) = keys_type(typeof(kl))
+keys_type(@nospecialize T::Type{<:KeyedList}) = _keys_type(T)
+
+@assume_effects :total _values_type(T::DataType) = @inbounds(T.parameters[2])
+values_type(@nospecialize kl::KeyedList) = values_type(typeof(kl))
+values_type(@nospecialize T::Type{<:KeyedList}) = _values_type(T)
+
 Base.eltype(@nospecialize kl::KeyedList) = eltype(typeof(kl))
 Base.eltype(@nospecialize T::Type{<:KeyedList}) = Pair{keytype(T),valtype(T)}
 
-Base.keytype(@nospecialize kl::KeyedList) = keytype(typeof(kl))
-Base.keytype(@nospecialize T::Type{<:KeyedList}) = eltype(T.parameters[1])
+Base.keytype(@nospecialize kl::KeyedList) = eltype(keys_type(kl))
+Base.keytype(@nospecialize T::Type{<:KeyedList}) = eltype(keys_type(T))
 
-Base.valtype(@nospecialize kl::KeyedList) = valtype(typeof(kl))
-Base.valtype(@nospecialize T::Type{<:KeyedList}) = eltype(T.parameters[2])
+Base.valtype(@nospecialize kl::KeyedList) = eltype(values_type(kl))
+Base.valtype(@nospecialize T::Type{<:KeyedList}) = eltype(values_type(T))
 
 Base.eachindex(@nospecialize(lst::List)) = static(1):slength(lst)
 @inline Base.keys(@nospecialize lst::List) = eachindex(lst)
@@ -140,6 +153,7 @@ Base.isempty(@nospecialize(kl::KeyedList)) = isempty(keys(kl))
 Base.empty(@nospecialize(lst::List)) = EMPTY_LIST
 Base.empty(@nospecialize(kl::KeyedList)) = _KeyedList(EMPTY_LIST, EMPTY_LIST)
 
+ArrayInterface.known_length(@nospecialize(lst::List)) = known_length(typeof(lst))
 ArrayInterface.known_length(::Type{Nil}) = 0
 ArrayInterface.known_length(::Type{List{Nil,Nil}}) = 0
 ArrayInterface.known_length(@nospecialize T::Type{<:OneItem}) = 1
@@ -149,19 +163,21 @@ function ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus})
     known_length(tail_type(tail_type(T))) + 2
 end
 ArrayInterface.known_length(@nospecialize(T::Type{<:List})) = known_length(tail_type(T)) + 1
-ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList})) = known_length(T.parameters[1])
+function ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList}))
+    known_length(keys_type(T))
+end
 
 @inline function ArrayInterface.known_first(@nospecialize T::Type{<:List})
-    f, _ = T.parameters
-    if Base.issingletontype(f)
+    f = first_type(T)
+    if isdefined(f, :instance)
         return f.instance
     else
         return nothing
     end
 end
 @inline function ArrayInterface.known_first(@nospecialize T::Type{<:KeyedList})
-    k = ArrayInterface.known_first(T.parameters[1])
-    v = ArrayInterface.known_first(T.parameters[2])
+    k = ArrayInterface.known_first(keys_type(T))
+    v = ArrayInterface.known_first(values_type(T))
     if k === nothing || v === nothing
         return nothing
     else
@@ -201,8 +217,7 @@ end
         return _List(first(x), unsafe_deleteat(tail(x), i - 1))
     end
 end
-@generated unsafe_deleteat(@nospecialize(x0::List), ::StaticInt{N}) where {N} = _deleteat_expr(N)
-function _deleteat_expr(N::Int)
+@generated function unsafe_deleteat(@nospecialize(x0::List), ::StaticInt{N}) where {N}
     if N === 1
         return :(Base.tail(x0))
     else
@@ -356,61 +371,41 @@ end
 end
 
 @generated function static_find_first(::F, ::L) where {F,L}
-    :($(StaticInt{find_first(F.instance, L.instace)}()))
-end
-
-## get
-@inline function Base.get(@nospecialize(x::List), ::StaticInt{N}, d) where {N}
-    if N === 1
-        return first(x)
-    else
-        t = tail(x)
-        if t === EMPTY_LIST
-            return d
-        else
-            return get(t, StaticInt{N - 1}(), d)
-        end
-    end
-end
-@inline function Base.get(@nospecialize(x::List), n::Int, d)
-    if n === 1
-        return first(x)
-    else
-        t = tail(x)
-        if t === EMPTY_LIST
-            return d
-        else
-            return get(t, n - 1, d)
-        end
-    end
-end
-# TODO benchmark and test this thing
-@inline Base.get(@nospecialize(kl::KeyedList), key, d) = _getkl(keys(kl), values(kl), key, d)
-@inline function _getkl(@nospecialize(ks), @nospecialize(vs), k, d)
-    if first(ks) === key
-        return first(vs)
-    else
-        ktail = tail(ks)
-        vtail = tail(vs)
-        if ktail === EMPTY_LIST && vtail === EMPTY_LIST
-            return _getkl(ktail, vtail, k, d)
-        else
-            return d
-        end
-    end
+    :($(StaticInt{find_first(F.instance, L.instance)}()))
 end
 
 ## getindex
-function Base.getindex(@nospecialize(lst::Union{KeyedList,List}), i)
+function Base.getindex(@nospecialize(lst::KeyedList), i)
     out = get(lst, i, nil)
     @boundscheck out === nil && throw(BoundsError(lst, i))
     return out
 end
+function Base.getindex(@nospecialize(lst::List), i::Integer)
+    @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
+    _unsafe_getindex(lst, i)
+end
+@inline function _unsafe_getindex(@nospecialize(lst::List), i::Int)
+    if i === 1
+        return first(lst)
+    else
+        return _unsafe_getindex(tail(lst), i - 1)
+    end
+end
+@generated function _unsafe_getindex(@nospecialize(lst::List), ::StaticInt{N}) where {N}
+    out = :lst
+    for _ in 1:(N - 1)
+        out = Expr(:call, :tail, out)
+    end
+    Expr(:call, :first, out)
+end
 
-# TODO setindex(::KeyedList)
+function Base.setindex(@nospecialize(kl::KeyedList), v, @nospecialize(key))
+    vs = Base.setindex(values(kl), v, maybe_static_find_first(==(key), keys(kl)))
+    _KeyedList(keys(kl), vs)
+end
 function Base.setindex(@nospecialize(x::List), v, @nospecialize(i::Integer))
     @boundscheck 1 <= i <= length(x) || throw(BoundsError(x, i))
-    return _setindex(x, v, i)
+    _setindex(x, v, i)
 end
 @inline function _setindex(@nospecialize(x::List), v, i::Int)
     if i === 1
@@ -419,8 +414,7 @@ end
         return _List(first(x), _setindex(tail(x), v, i - 1))
     end
 end
-@generated _setindex(@nospecialize(x0), v, ::StaticInt{N}) where {N} = _setindex_expr(N)
-function _setindex_expr(N::Int)
+@generated function _setindex(@nospecialize(x0), v, ::StaticInt{N}) where {N}
     if N === 1
         return :(_List(v, tail(x0)))
     else
@@ -439,6 +433,35 @@ function _setindex_expr(N::Int)
         return out
     end
 end
+
+## get
+@inline function Base.get(@nospecialize(lst::List), @nospecialize(i::Integer), d)
+    if 1 <= i <= length(lst)
+        return _unsafe_getindex(lst, i)
+    else
+        return d
+    end
+end
+
+# TODO benchmark and test this thing
+@inline function Base.get(@nospecialize(kl::KeyedList), @nospecialize(key), d)
+    get(values(kl), maybe_static_find_first(==(key), keys(kl)), d)
+end
+#=
+@inline function _getkl(@nospecialize(ks), @nospecialize(vs), k, d)
+    if first(ks) === key
+        return first(vs)
+    else
+        ktail = tail(ks)
+        vtail = tail(vs)
+        if ktail === EMPTY_LIST && vtail === EMPTY_LIST
+            return _getkl(ktail, vtail, k, d)
+        else
+            return d
+        end
+    end
+end
+=#
 
 # TODO map(::KeyedList)
 Base.map(f, @nospecialize(lst::OneItem)) = List(f(first(lst)))
@@ -511,40 +534,5 @@ function Base.show(io::IO, ::MIME"text/plain", @nospecialize(kl::KeyedList))
     end
     print(")")
 end
-
-#=
-#=
-    SubList
-=#
-struct SubList{P,I}
-    parent::P
-    indices::I
-end
-
-subitr(@nospecialize(lst), i::List{True}) = first(lst), (tail(lst), tail(i))
-subitr(@nospecialize(lst), i::List{False}) = subitr(tail(lst), tail(i))
-
-Base.iterate(@nospecialize(lst::Sublist)) = subitr(lst.parent, lst.indices)
-Base.iterate(@nospecialize(lst::Sublist), ::Tuple{Nil,Nil}) = nothing
-Base.iterate(@nospecialize(lst::Sublist), @nospecialize(s)) = @inbounds subitr(s[1], s[2])
-
-_listindices(::StaticInt{1}) = List(True(), nil)
-_listindices(::StaticInt{N}) where {N} = List(True(), _listindices(static(N - 1)))
-listindices(@nospecialize x::List) = _listindices(ArrayInterface.static_length(x))
-
-list(ntuple(static, Val(known_length(lst)))...)
-
-function static_is_singleton_type(@nospecialize x)
-    if Base.issingletontype(x)
-        return True()
-    else
-        return False()
-    end
-end
-
-@inline function _is_singleton_keys_type(@nospecialize(T::Type{<:KeyedList}))
-    static_is_singleton_type(@inbounds(T.parameters[1]))
-end
-=#
 
 end
