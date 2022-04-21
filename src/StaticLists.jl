@@ -6,6 +6,14 @@ import ArrayInterface: static_length as slength
 using Base: front, tail
 using Static
 
+@static if isdefined(Base, Symbol("@assume_effects"))
+    using Base: @assume_effects
+else
+    macro assume_effects(_, ex)
+        Base.@pure ex
+    end
+end
+
 export KeyedList, List
 
 struct Nil end
@@ -25,7 +33,9 @@ struct List{F,T}
 end
 
 const EMPTY_LIST = _List(nil, nil)
-const ListEnd{F} = List{F,List{Nil,Nil}}
+const OneItem{T} = List{T,List{Nil,Nil}}
+const TwoItems{T1,T2} = List{T1,OneItem{T2}}
+const List2Plus{T1,T2,T3,L} = List{T1,List{T2,List{T3,L}}}
 
 tuple_to_list(@nospecialize(t::Tuple)) = _tuple_to_list(slength(t), t)
 @generated function _tuple_to_list(::StaticInt{N}, @nospecialize(t::Tuple)) where {N}
@@ -66,13 +76,29 @@ end
     _KeyedList(tuple_to_list(static(keys(v))), tuple_to_list(values(v)))
 end
 
-Base.eltype(::Type{List{Nil,Nil}}) = Any
 Base.eltype(@nospecialize lst::List) = eltype(typeof(lst))
-Base.eltype(@nospecialize T::Type{ListEnd}) = T.parameters[1]
-function Base.eltype(@nospecialize T::Type{List})
-    f, t = T.parameters
-    return typejoin(f, eltype(t))
+Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
+@generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:List})) where {N}
+    if N === 0
+        return :Any
+    elseif N === 1
+        return :(_first_type(T))
+    else
+        out = :(_first_type(T))
+        t = :(tail_type(T))
+        for _ in 1:(N-1)
+            out = Expr(:call, :typejoin, out, :(_first_type($(t))))
+            t = :(tail_type($(t)))
+        end
+        return out
+    end
 end
+
+@assume_effects :total _first_type(T::DataType) = @inbounds(T.parameters[1])
+@assume_effects :total _tail_type(T::DataType) = @inbounds(T.parameters[2])
+tail_type(@nospecialize lst::List) = tail_type(typeof(lst))
+tail_type(@nospecialize T::Type{<:List}) = _tail_type(T)
+
 Base.eltype(@nospecialize kl::KeyedList) = eltype(typeof(kl))
 Base.eltype(@nospecialize T::Type{<:KeyedList}) = Pair{keytype(T),valtype(T)}
 
@@ -94,7 +120,7 @@ Base.first(@nospecialize lst::List) = getfield(lst, :first)
 Base.first(@nospecialize kl::KeyedList) = Pair(first(keys(kl)), first(values(kl)))
 
 Base.last(::List{Nil,Nil}) = throw(ArgumentError("Attempt to access last element of empty list."))
-Base.last(@nospecialize lst::ListEnd) = first(lst)
+Base.last(@nospecialize lst::OneItem) = first(lst)
 Base.last(@nospecialize lst::List) = last(tail(lst))
 Base.last(@nospecialize kl::KeyedList) = Pair(last(keys(kl)), last(values(kl)))
 
@@ -103,8 +129,8 @@ Base.tail(@nospecialize lst::List) = getfield(lst, :tail)
 Base.tail(@nospecialize kl::KeyedList) = _KeyedList(tail(keys(kl)), tail(values(kl)))
 
 Base.front(::List{Nil,Nil}) = throw(ArgumentError("Cannot call Base.front on an empty list"))
-Base.front(@nospecialize(lst::ListEnd)) = EMPTY_LIST
-@inline Base.front(@nospecialize(lst::List)) = _List(first(lst), front(lst))
+Base.front(@nospecialize(lst::OneItem)) = EMPTY_LIST
+@inline Base.front(@nospecialize(lst::List)) = _List(first(lst), front(tail(lst)))
 Base.front(@nospecialize(kl::KeyedList)) = _KeyedList(front(keys(kl)), front(values(kl)))
 
 Base.isempty(::List{Nil,Nil}) = true
@@ -114,11 +140,15 @@ Base.isempty(@nospecialize(kl::KeyedList)) = isempty(keys(kl))
 Base.empty(@nospecialize(lst::List)) = EMPTY_LIST
 Base.empty(@nospecialize(kl::KeyedList)) = _KeyedList(EMPTY_LIST, EMPTY_LIST)
 
-# TODO ArrayInterface.known_length(::KeyedList)
+ArrayInterface.known_length(::Type{Nil}) = 0
 ArrayInterface.known_length(::Type{List{Nil,Nil}}) = 0
-@inline function ArrayInterface.known_length(@nospecialize T::Type{<:List})
-    1 + known_length(T.parameters[2])
+ArrayInterface.known_length(@nospecialize T::Type{<:OneItem}) = 1
+ArrayInterface.known_length(@nospecialize T::Type{<:TwoItems}) = 2
+# skipping the middle value helps with inference here
+function ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus})
+    known_length(tail_type(tail_type(T))) + 2
 end
+ArrayInterface.known_length(@nospecialize(T::Type{<:List})) = known_length(tail_type(T)) + 1
 ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList})) = known_length(T.parameters[1])
 
 @inline function ArrayInterface.known_first(@nospecialize T::Type{<:List})
@@ -139,19 +169,61 @@ end
     end
 end
 
-Base.length(@nospecialize lst::List) = known_length(typeof(lst))
-Base.length(@nospecialize kl::KeyedList) = known_length(typeof(kl))
+Base.length(::List{Nil,Nil}) = 0
+@inline Base.length(@nospecialize(lst::List)) = length(tail(lst)) + 1
+Base.length(@nospecialize(kl::KeyedList)) = length(keys(kl))
 
 Base.IteratorSize(@nospecialize T::Type{<:List}) = Base.HasLength()
 Base.IteratorSize(@nospecialize T::Type{<:KeyedList}) = Base.HasLength()
 
-# TODO deleteat
-function deleteat(@nospecialize(lst::List), key) end
-function deleteat(@nospecialize(lst::KeyedList), key) end
+Base.:(==)(::List{Nil,Nil}, ::List{Nil,Nil}) = true
+@inline function Base.:(==)(@nospecialize(x::List),@nospecialize(y::List))
+    if first(x) == first(y)
+        return ==(tail(x), tail(y))
+    else
+        return false
+    end
+end
+function Base.:(==)(@nospecialize(x::KeyedList),@nospecialize(y::KeyedList))
+    ==(keys(x), keys(y)) && ==(values(x), values(y))
+end
 
+# TODO function deleteat(@nospecialize(lst::KeyedList), key) end
+deleteat(::List{Nil,Nil}, key) = throw(ArgumentError("list must be non-empty"))
+function deleteat(@nospecialize(lst::List), i)
+    @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
+    unsafe_deleteat(lst, i)
+end
+@inline function unsafe_deleteat(@nospecialize(x), i::Int)
+    if i === 1
+        return tail(x)
+    else
+        return _List(first(x), unsafe_deleteat(tail(x), i - 1))
+    end
+end
+@generated unsafe_deleteat(@nospecialize(x0::List), ::StaticInt{N}) where {N} = _deleteat_expr(N)
+function _deleteat_expr(N::Int)
+    if N === 1
+        return :(Base.tail(x0))
+    else
+        out = Expr(:block, Expr(:meta, :inline))
+        psym = :x0
+        for i in 1:(N-1)
+            tmp = Symbol(:x, i)
+            push!(out.args, Expr(:(=), tmp, :(Base.tail($psym))))
+            psym = tmp
+        end
+        r = :(Base.tail($(Symbol(:x, N-1))))
+        for i in (N - 2):-1:0
+            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
+        end
+        push!(out.args, r)
+        return out
+    end
+end
 
 """
-    pushfirst(list, item)
+    StaticLists.pushfirst(list, item)
 
 Returns a new list with `item` added to the front.
 """
@@ -162,11 +234,11 @@ pushfirst(@nospecialize(lst::List), @nospecialize(item)) = List(item, lst)
 end
 
 """
-    push(list, item)
+    StaticLists.push(list, item)
 
 Returns a new list with `item` added to the end.
 """
-push(@nospecialize(lst::ListEnd), @nospecialize(item)) = List(first(lst), List(item))
+push(@nospecialize(lst::OneItem), @nospecialize(item)) = List(first(lst), List(item))
 push(@nospecialize(lst::List), @nospecialize(item)) = List(first(lst), push(tail(lst), item))
 @inline function push(@nospecialize(kl::KeyedList), @nospecialize(kv::Pair))
     k, v = kv
@@ -174,12 +246,12 @@ push(@nospecialize(lst::List), @nospecialize(item)) = List(first(lst), push(tail
 end
 
 """
-    pop(list) -> (last(list), Base.front(list))
+    StaticLists.pop(list) -> (last(list), Base.front(list))
 
 Returns a tuple with the last item and the list without the last item.
 """
 pop(::List{Nil,Nil}) = error("List must be non-empty.")
-pop(@nospecialize(lst::ListEnd)) = first(lst), tail(lst)
+pop(@nospecialize(lst::OneItem)) = first(lst), tail(lst)
 @inline function pop(@nospecialize(lst::List))
     item, t = pop(tail(lst))
     item, _List(first(lst), t)
@@ -191,7 +263,7 @@ end
 end
 
 """
-    popfirst(list) -> (first(list), Base.tail(list))
+    StaticLists.popfirst(list) -> (first(list), Base.tail(list))
 
 Returns a tuple with the first item and the list without the first item.
 """
@@ -200,6 +272,45 @@ popfirst(@nospecialize(lst::List)) = first(lst), tail(lst)
     kf, kt = popfirst(keys(kl))
     vf, vt = popfirst(values(kl))
     Pair(kf, vf), _KeyedList(kt ,vt)
+end
+
+"""
+    StaticLists.popat(list, key) -> (list[key], StaticLists.delete(list, key))
+
+Returns the value at `key` and the list without the value.
+"""
+popat(::List{Nil,Nil}) = throw(ArgumentError("list must be non-empty"))
+function popat(@nospecialize(lst::List), i::Integer)
+    @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
+    unsafe_popat(lst, i)
+end
+@inline function unsafe_popat(@nospecialize(x), i::Int)
+    if i === 1
+        return first(x), tail(x)
+    else
+        f, t = popat(tail(x), i - 1)
+        return f, _List(first(x), t)
+    end
+end
+@generated unsafe_popat(@nospecialize(x0), ::StaticInt{N}) where {N} = _popat_expr(N)
+function _popat_expr(N::Int)
+    if N === 1
+        return :(first(x0), tail(x0))
+    else
+        out = Expr(:block, Expr(:meta, :inline))
+        psym = :x0
+        for i in 1:(N-1)
+            tmp = Symbol(:x, i)
+            push!(out.args, Expr(:(=), tmp, :(tail($psym))))
+            psym = tmp
+        end
+        r = :(tail($(Symbol(:x, N-1))))
+        for i in (N - 2):-1:0
+            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
+        end
+        push!(out.args, :(first($(Symbol(:x, N-1))), $r))
+        return out
+    end
 end
 
 ## findfirst
@@ -211,7 +322,7 @@ function Base.findfirst(f::Function, @nospecialize(lst::List))
         return n
     end
 end
-@inline find_first(f, @nospecialize(lst::ListEnd)) = f(first(lst)) ? 1 : 0
+@inline find_first(f, @nospecialize(lst::OneItem)) = f(first(lst)) ? 1 : 0
 @inline function find_first(f, @nospecialize(lst::List))
     if f(first(lst))
         return 1
@@ -223,6 +334,18 @@ end
             return n + 1
         end
     end
+end
+
+@inline function maybe_static_find_first(@nospecialize(f), @nospecialize(lst::List))
+    if isdefined(typeof(lst), :instance) && isdefined(typeof(f), :instance)
+        return static_find_first(f, lst)
+    else
+        return find_first(f, lst)
+    end
+end
+
+@generated function static_find_first(::F, ::L) where {F,L}
+    :($(StaticInt{find_first(F.instance, L.instace)}()))
 end
 
 ## get
@@ -238,9 +361,8 @@ end
         end
     end
 end
-
 @inline function Base.get(@nospecialize(x::List), n::Int, d)
-    if i === 1
+    if n === 1
         return first(x)
     else
         t = tail(x)
@@ -272,44 +394,6 @@ function Base.getindex(@nospecialize(lst::Union{KeyedList,List}), i)
     out = get(lst, i, nil)
     @boundscheck out === nil && throw(BoundsError(lst, i))
     return out
-end
-
-"""
-    popat(list, key) -> (list[key], StaticLists.delete(list, key))
-
-Returns the value at `key` and the list without the item.
-"""
-popat(::List{Nil,Nil}) = throw(ArgumentError("list must be non-empty"))
-function popat(@nospecialize(lst::List), i::Integer)
-    @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
-    unsafe_popat(lst, i)
-end
-@inline function unsafe_popat(@nospecialize(x), i::Int)
-    if i === 1
-        return tail(x)
-    else
-        return List(first(x), popat(tail(x), i - 1))
-    end
-end
-@generated unsafe_popat(@nospecialize(x0), ::StaticInt{N}) where {N} = _popat_expr(N)
-function _popat_expr(N::Int)
-    if N === 1
-        return :(tail(x0))
-    else
-        out = Expr(:block, Expr(:meta, :inline))
-        psym = :x0
-        for i in 1:(N-1)
-            tmp = Symbol(:x, i)
-            push!(out.args, Expr(:(=), tmp, :(tail($psym))))
-            psym = tmp
-        end
-        r = :(tail($(Symbol(:x, N-1))))
-        for i in (N - 2):-1:0
-            r = Expr(:call, :List, Expr(:call, :first, Symbol(:x, i)), r)
-        end
-        push!(out.args, Expr(:return, r))
-        return out
-    end
 end
 
 # TODO setindex(::KeyedList)
@@ -346,7 +430,7 @@ function _setindex_expr(N::Int)
 end
 
 # TODO map(::KeyedList)
-Base.map(f, @nospecialize(lst::ListEnd)) = list(f(first(lst)))
+Base.map(f, @nospecialize(lst::OneItem)) = list(f(first(lst)))
 @inline Base.map(f, @nospecialize(lst::List)) = list(f(first(lst)), map(f, tail(lst)))
 
 @inline function Base.in(x, @nospecialize(lst::List))
@@ -450,8 +534,6 @@ end
 @inline function _is_singleton_keys_type(@nospecialize(T::Type{<:KeyedList}))
     static_is_singleton_type(@inbounds(T.parameters[1]))
 end
-
-
 =#
 
 end
