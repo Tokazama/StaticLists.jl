@@ -3,7 +3,13 @@ uuid = "d1891b89-3aa8-469e-a5ac-90bba77ac8f3"
 authors = ["Zachary P. Christensen <zchristensen7@gmail.com> and contributors"]
 version = "0.1.0"
 
+[deps]
+ArrayInterface = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
+Static = "aedffcd0-7271-4cad-89d0-dc628f76c6d3"
+
 [compat]
+ArrayInterface = "5"
+Static = "0.6"
 julia = "1"
 
 [extras]
