@@ -13,8 +13,11 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(tail(lst)) == List(static(2), static(3), static(4))
 @test @inferred(front(lst)) == List(static(1), static(2), static(3))
 @test @inferred(eltype(lst)) <: StaticInt
+@test isempty(@inferred(empty(lst)))
 
 lst = List(1, 2, 3, 4)
+@test @inferred(push(lst, 5)) == List(1, 2, 3, 4, 5)
+@test @inferred(pushfirst(lst, 0)) == List(0, 1, 2, 3, 4)
 @test @inferred(StaticLists.deleteat(lst, 3)) == List(1, 2, 4)
 @test @inferred(StaticLists.deleteat(lst, static(3))) == List(1, 2, 4)
 @test @inferred(pop(lst)) == (4, List(1, 2, 3))
