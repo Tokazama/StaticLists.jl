@@ -227,7 +227,7 @@ end
 
 Returns a new list with `item` added to the front.
 """
-pushfirst(@nospecialize(lst::List), @nospecialize(item)) = List(item, lst)
+pushfirst(@nospecialize(lst::List), @nospecialize(item)) = _List(item, lst)
 @inline function pushfirst(@nospecialize(kl::KeyedList), @nospecialize(kv::Pair))
     k, v = kv
     _KeyedList(pushfirst(keys(kl), k), pushfirst(values(kl), v))
@@ -238,8 +238,8 @@ end
 
 Returns a new list with `item` added to the end.
 """
-push(@nospecialize(lst::OneItem), @nospecialize(item)) = List(first(lst), List(item))
-push(@nospecialize(lst::List), @nospecialize(item)) = List(first(lst), push(tail(lst), item))
+push(@nospecialize(lst::OneItem), @nospecialize(item)) = _List(first(lst), List(item))
+push(@nospecialize(lst::List), @nospecialize(item)) = _List(first(lst), push(tail(lst), item))
 @inline function push(@nospecialize(kl::KeyedList), @nospecialize(kv::Pair))
     k, v = kv
     _KeyedList(push(keys(kl), k), push(values(kl), v))
