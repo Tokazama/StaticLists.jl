@@ -403,15 +403,15 @@ function Base.setindex(@nospecialize(x::List), v, @nospecialize(i::Integer))
 end
 @inline function _setindex(@nospecialize(x::List), v, i::Int)
     if i === 1
-        return List(v, tail(x))
+        return _List(v, tail(x))
     else
-        return List(first(x), _setindex(tail(x), v, i - 1))
+        return _List(first(x), _setindex(tail(x), v, i - 1))
     end
 end
 @generated _setindex(@nospecialize(x0), v, ::StaticInt{N}) where {N} = _setindex_expr(N)
 function _setindex_expr(N::Int)
     if N === 1
-        return :(List(v, tail(x0)))
+        return :(_List(v, tail(x0)))
     else
         out = Expr(:block, Expr(:meta, :inline))
         psym = :x0
@@ -420,9 +420,9 @@ function _setindex_expr(N::Int)
             push!(out.args, Expr(:(=), tmp, :(tail($psym))))
             psym = tmp
         end
-        r = :(List(v, tail($(Symbol(:x, N-1)))))
+        r = :(_List(v, tail($(Symbol(:x, N-1)))))
         for i in (N - 2):-1:0
-            r = Expr(:call, :List, Expr(:call, :first, Symbol(:x, i)), r)
+            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
         end
         push!(out.args, Expr(:return, r))
         return out
@@ -441,7 +441,7 @@ Base.map(f, @nospecialize(lst::OneItem)) = list(f(first(lst)))
         if t === EMPTY_LIST
             return false
         else
-            return in(lst, t)
+            return in(x, t)
         end
     end
 end

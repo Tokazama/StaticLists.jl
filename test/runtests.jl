@@ -6,6 +6,7 @@ using Static
 using Test
 
 lst = List(static(1), static(2), static(3), static(4))
+@test values(lst) == lst
 @test @inferred(length(lst)) == 4
 @test @inferred(ArrayInterface.known_length(lst)) == 4
 @test @inferred(first(lst)) == 1
@@ -16,6 +17,10 @@ lst = List(static(1), static(2), static(3), static(4))
 @test isempty(@inferred(empty(lst)))
 
 lst = List(1, 2, 3, 4)
+@test @inferred(in(4, lst))
+@test @inferred(in(5, lst)) === false
+@test @inferred(Base.setindex(lst, 6, 3)) == List(1, 2, 6, 4)
+@test @inferred(Base.setindex(lst, 6, static(3))) == List(1, 2, 6, 4)
 @test @inferred(push(lst, 5)) == List(1, 2, 3, 4, 5)
 @test @inferred(pushfirst(lst, 0)) == List(0, 1, 2, 3, 4)
 @test @inferred(StaticLists.deleteat(lst, 3)) == List(1, 2, 4)
