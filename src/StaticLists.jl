@@ -14,6 +14,8 @@ else
     end
 end
 
+@inline sub1(@nospecialize n::Integer) = n - one(n)
+
 export KeyedList, List
 
 struct Nil end
@@ -79,11 +81,10 @@ end
 Base.haskey(@nospecialize(kl::KeyedList), key) = in(key, keys(kl))
 
 Base.eltype(@nospecialize lst::List) = eltype(typeof(lst))
+Base.eltype(::Type{List{Nil,Nil}}) = Any
 Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
 @generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:List})) where {N}
-    if N === 0
-        return :Any
-    elseif N === 1
+    if N === 1
         return :(first_type(T))
     else
         out = :(first_type(T))
@@ -210,30 +211,11 @@ function deleteat(@nospecialize(lst::List), i)
     @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
     unsafe_deleteat(lst, i)
 end
-@inline function unsafe_deleteat(@nospecialize(x), i::Int)
-    if i === 1
+@inline function unsafe_deleteat(@nospecialize(x), @nospecialize(i::Integer))
+    if isone(i)
         return tail(x)
     else
-        return _List(first(x), unsafe_deleteat(tail(x), i - 1))
-    end
-end
-@generated function unsafe_deleteat(@nospecialize(x0::List), ::StaticInt{N}) where {N}
-    if N === 1
-        return :(Base.tail(x0))
-    else
-        out = Expr(:block, Expr(:meta, :inline))
-        psym = :x0
-        for i in 1:(N-1)
-            tmp = Symbol(:x, i)
-            push!(out.args, Expr(:(=), tmp, :(Base.tail($psym))))
-            psym = tmp
-        end
-        r = :(Base.tail($(Symbol(:x, N-1))))
-        for i in (N - 2):-1:0
-            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
-        end
-        push!(out.args, r)
-        return out
+        return _List(first(x), unsafe_deleteat(tail(x), sub1(i)))
     end
 end
 
@@ -299,32 +281,12 @@ function popat(@nospecialize(lst::List), i::Integer)
     @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
     unsafe_popat(lst, i)
 end
-@inline function unsafe_popat(@nospecialize(x), i::Int)
-    if i === 1
+@inline function unsafe_popat(@nospecialize(x), @nospecialize(i::Integer))
+    if isone(i)
         return first(x), tail(x)
     else
-        f, t = popat(tail(x), i - 1)
+        f, t = popat(tail(x), sub1(i))
         return f, _List(first(x), t)
-    end
-end
-@generated unsafe_popat(@nospecialize(x0), ::StaticInt{N}) where {N} = _popat_expr(N)
-function _popat_expr(N::Int)
-    if N === 1
-        return :(first(x0), tail(x0))
-    else
-        out = Expr(:block, Expr(:meta, :inline))
-        psym = :x0
-        for i in 1:(N-1)
-            tmp = Symbol(:x, i)
-            push!(out.args, Expr(:(=), tmp, :(tail($psym))))
-            psym = tmp
-        end
-        r = :(tail($(Symbol(:x, N-1))))
-        for i in (N - 2):-1:0
-            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
-        end
-        push!(out.args, :(first($(Symbol(:x, N-1))), $r))
-        return out
     end
 end
 
@@ -384,19 +346,12 @@ function Base.getindex(@nospecialize(lst::List), i::Integer)
     @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
     _unsafe_getindex(lst, i)
 end
-@inline function _unsafe_getindex(@nospecialize(lst::List), i::Int)
-    if i === 1
+@inline function _unsafe_getindex(@nospecialize(lst::List), @nospecialize(i::Integer))
+    if isone(i)
         return first(lst)
     else
-        return _unsafe_getindex(tail(lst), i - 1)
+        return _unsafe_getindex(tail(lst), sub1(i))
     end
-end
-@generated function _unsafe_getindex(@nospecialize(lst::List), ::StaticInt{N}) where {N}
-    out = :lst
-    for _ in 1:(N - 1)
-        out = Expr(:call, :tail, out)
-    end
-    Expr(:call, :first, out)
 end
 
 function Base.setindex(@nospecialize(kl::KeyedList), v, @nospecialize(key))
@@ -407,30 +362,11 @@ function Base.setindex(@nospecialize(x::List), v, @nospecialize(i::Integer))
     @boundscheck 1 <= i <= length(x) || throw(BoundsError(x, i))
     _setindex(x, v, i)
 end
-@inline function _setindex(@nospecialize(x::List), v, i::Int)
-    if i === 1
+@inline function _setindex(@nospecialize(x::List), v, @nospecialize(i::Integer))
+    if isone(i)
         return _List(v, tail(x))
     else
-        return _List(first(x), _setindex(tail(x), v, i - 1))
-    end
-end
-@generated function _setindex(@nospecialize(x0), v, ::StaticInt{N}) where {N}
-    if N === 1
-        return :(_List(v, tail(x0)))
-    else
-        out = Expr(:block, Expr(:meta, :inline))
-        psym = :x0
-        for i in 1:(N-1)
-            tmp = Symbol(:x, i)
-            push!(out.args, Expr(:(=), tmp, :(tail($psym))))
-            psym = tmp
-        end
-        r = :(_List(v, tail($(Symbol(:x, N-1)))))
-        for i in (N - 2):-1:0
-            r = Expr(:call, :_List, Expr(:call, :first, Symbol(:x, i)), r)
-        end
-        push!(out.args, Expr(:return, r))
-        return out
+        return _List(first(x), _setindex(tail(x), v, sub1(i)))
     end
 end
 
@@ -447,21 +383,6 @@ end
 @inline function Base.get(@nospecialize(kl::KeyedList), @nospecialize(key), d)
     get(values(kl), maybe_static_find_first(==(key), keys(kl)), d)
 end
-#=
-@inline function _getkl(@nospecialize(ks), @nospecialize(vs), k, d)
-    if first(ks) === key
-        return first(vs)
-    else
-        ktail = tail(ks)
-        vtail = tail(vs)
-        if ktail === EMPTY_LIST && vtail === EMPTY_LIST
-            return _getkl(ktail, vtail, k, d)
-        else
-            return d
-        end
-    end
-end
-=#
 
 # TODO map(::KeyedList)
 Base.map(f, @nospecialize(lst::OneItem)) = List(f(first(lst)))

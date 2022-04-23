@@ -48,3 +48,4 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 @test @inferred(values(kl)) == List(1, 2, 3, 4)
 @test @inferred(keys(kl)) == List(:a, :b, :c, :d)
 @test @inferred(kl[static(:b)]) == 2
+@test kl == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4)
