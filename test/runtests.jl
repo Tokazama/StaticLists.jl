@@ -41,11 +41,24 @@ end
 
 kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 3, 4))
 @test @inferred(keytype(kl)) <: StaticSymbol
+@test @inferred(keytype(typeof(kl))) <: StaticSymbol
+@test @inferred(eltype(kl)) <: Pair{StaticSymbol,Int}
+@test @inferred(eltype(typeof(kl))) <: Pair{StaticSymbol,Int}
 @test @inferred(valtype(kl)) <: Int
+@test @inferred(valtype(typeof(kl))) <: Int
 @test @inferred(length(kl)) == 4
 @test @inferred(first(kl)) == Pair(static(:a), 1)
 @test @inferred(last(kl)) == Pair(static(:d), 4)
+@test @inferred(tail(kl)) == KeyedList(List(static(:b), static(:c), static(:d)), List(2, 3, 4))
+@test @inferred(front(kl)) == KeyedList(List(static(:a), static(:b), static(:c)), List(1, 2, 3))
 @test @inferred(values(kl)) == List(1, 2, 3, 4)
 @test @inferred(keys(kl)) == List(:a, :b, :c, :d)
 @test @inferred(kl[static(:b)]) == 2
 @test kl == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4)
+
+
+elst = empty(lst)
+@test_throws ArgumentError first(elst)
+@test_throws ArgumentError last(elst)
+@test_throws ArgumentError tail(elst)
+@test_throws ArgumentError front(elst)
