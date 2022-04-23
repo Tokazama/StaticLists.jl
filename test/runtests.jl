@@ -10,6 +10,7 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(filter(isodd, lst)) == List(static(1), static(3))
 @test @inferred(length(lst)) == 4
 @test @inferred(ArrayInterface.known_length(lst)) == 4
+@test @inferred(ArrayInterface.known_length(typeof(empty(lst)))) == 0
 @test @inferred(first(lst)) == 1
 @test @inferred(last(lst)) == 4
 @test @inferred(tail(lst)) == List(static(2), static(3), static(4))
@@ -47,6 +48,7 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 @test @inferred(valtype(kl)) <: Int
 @test @inferred(valtype(typeof(kl))) <: Int
 @test @inferred(length(kl)) == 4
+@test @inferred(ArrayInterface.known_length(kl)) == 4
 @test @inferred(first(kl)) == Pair(static(:a), 1)
 @test @inferred(last(kl)) == Pair(static(:d), 4)
 @test @inferred(tail(kl)) == KeyedList(List(static(:b), static(:c), static(:d)), List(2, 3, 4))
@@ -55,7 +57,20 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 @test @inferred(keys(kl)) == List(:a, :b, :c, :d)
 @test @inferred(kl[static(:b)]) == 2
 @test kl == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4)
+@test isempty(empty(kl))
+for (lst_i,kl_i) = zip(lst, kl)
+    @test lst_i == kl_i[2]
+end
 
+io = IOBuffer()
+show(io, List(1, 2, 3, 4))
+str = String(take!(io))
+@test str == "List(1, 2, 3, 4)"
+
+io = IOBuffer()
+show(io, kl)
+str = String(take!(io))
+@test str == "KeyedList(static(:a) => 1, static(:b) => 2, static(:c) => 3, static(:d) => 4)"
 
 elst = empty(lst)
 @test_throws ArgumentError first(elst)

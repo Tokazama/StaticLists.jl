@@ -155,7 +155,6 @@ Base.empty(@nospecialize(lst::List)) = EMPTY_LIST
 Base.empty(@nospecialize(kl::KeyedList)) = _KeyedList(EMPTY_LIST, EMPTY_LIST)
 
 ArrayInterface.known_length(@nospecialize(lst::List)) = known_length(typeof(lst))
-ArrayInterface.known_length(::Type{Nil}) = 0
 ArrayInterface.known_length(::Type{List{Nil,Nil}}) = 0
 ArrayInterface.known_length(@nospecialize T::Type{<:OneItem}) = 1
 ArrayInterface.known_length(@nospecialize T::Type{<:TwoItems}) = 2
@@ -429,31 +428,35 @@ end
     end
 end
 
-function Base.show(io::IO, ::MIME"text/plain", @nospecialize(m::List))
-    print(io, "List(")
-    N = length(m)
+Base.show(io::IO, @nospecialize(lst::List)) = show(io, MIME"text/plain"(), lst)
+function Base.show(io::IO, ::MIME"text/plain", @nospecialize(lst::List))
+    out = "List("
+    N = length(lst)
     i = 1
-    for m_i in m
-        print(io, m_i)
+    for m_i in lst
+        out *= "$(m_i)"
         if N !== i
-            print(io, ", ")
+            out *= ", "
         end
         i += 1
     end
-    print(")")
+    out *= ")"
+    print(io, out)
 end
+Base.show(io::IO, @nospecialize(kl::KeyedList)) = show(io, MIME"text/plain"(), kl)
 function Base.show(io::IO, ::MIME"text/plain", @nospecialize(kl::KeyedList))
-    print(io, "KeyedList(")
+    out = "KeyedList("
     N = length(kl)
     i = 1
     for (k,v) in kl
-        print(io, k, " => ", v)
+        out *= "$(k) => $(v)"
         if N !== i
-            print(io, ", ")
+            out *= ", "
         end
         i += 1
     end
-    print(")")
+    out *= ")"
+    print(io, out)
 end
 
 end
