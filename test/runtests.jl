@@ -9,6 +9,7 @@ lst = List(static(1), static(2), static(3), static(4))
 @test values(lst) == lst
 @test @inferred(filter(isodd, lst)) == List(static(1), static(3))
 @test @inferred(length(lst)) == 4
+@test @inferred(ArrayInterface.known_length(typeof(List(1)))) == 1
 @test @inferred(ArrayInterface.known_length(lst)) == 4
 @test @inferred(ArrayInterface.known_length(typeof(empty(lst)))) == 0
 @test @inferred(first(lst)) == 1
@@ -58,6 +59,8 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 @test @inferred(keys(kl)) == List(:a, :b, :c, :d)
 @test @inferred(kl[static(:b)]) == 2
 @test kl == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4)
+@test @inferred(StaticLists.pop(kl)) == (last(kl), front(kl))
+@test @inferred(StaticLists.popfirst(kl)) == (first(kl), tail(kl))
 @test @inferred(pushfirst(kl, :z => 0)) == KeyedList(:z => 0, :a => 1, :b => 2, :c => 3, :d => 4)
 @test @inferred(push(kl, :e => 5)) == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4, :e => 5)
 @test @inferred(StaticLists.deleteat(KeyedList(:a => 1, :b => 2, :c => 3, :d => 4), :c)) == KeyedList(:a => 1, :b => 2, :d => 4)
