@@ -21,6 +21,7 @@ lst = List(static(1), static(2), static(3), static(4))
 @test eltype(typeof(empty(lst))) <: Any
 @test !isempty(lst)
 @test @inferred(ArrayInterface.known_first(lst)) === static(1)
+@test @inferred(ArrayInterface.known_first(typeof(lst))) === static(1)
 
 lst = List(1, 2, 3, 4)
 @test @inferred(ArrayInterface.known_first(lst)) === nothing

@@ -101,31 +101,43 @@ end
 Base.eltype(@nospecialize(T::Type{<:KeyedList})) = Pair{keytype(T),valtype(T)}
 
 @assume_effects :total _first_type(T::DataType) = @inbounds(T.parameters[1])
-first_type(@nospecialize lst::List) = first_type(typeof(lst))
-first_type(@nospecialize T::Type{<:List}) = _first_type(T)
-first_type(@nospecialize T::Type{<:KeyedList}) = Pair{first_type(keys_type(T)), first_type(values_type(T))}
+first_type(@nospecialize(lst::ListType)) = first_type(typeof(lst))
+first_type(@nospecialize(T::Type{<:List})) = _first_type(T)
+first_type(@nospecialize(T::Type{<:KeyedList})) = Pair{first_type(keys_type(T)), first_type(values_type(T))}
 
 @assume_effects :total _tail_type(T::DataType) = @inbounds(T.parameters[2])
-tail_type(@nospecialize lst::List) = tail_type(typeof(lst))
+tail_type(@nospecialize(lst::ListType)) = tail_type(typeof(lst))
 tail_type(@nospecialize T::Type{<:List}) = _tail_type(T)
 
 @assume_effects :total _keys_type(T::DataType) = @inbounds(T.parameters[1])
-keys_type(@nospecialize kl::KeyedList) = keys_type(typeof(kl))
-keys_type(@nospecialize T::Type{<:KeyedList}) = _keys_type(T)
+@inline keys_type(@nospecialize(x::ListType)) = keys_type(typeof(x))
+keys_type(@nospecialize(T::Type{<:KeyedList})) = _keys_type(T)
+@inline function keys_type(@nospecialize(T::Type{<:List}))
+    ArrayInterface.OptionallyStaticUnitRange{StaticInt{1},StaticInt{known_length(T)}}
+end
 
 @assume_effects :total _values_type(T::DataType) = @inbounds(T.parameters[2])
-values_type(@nospecialize kl::KeyedList) = values_type(typeof(kl))
-values_type(@nospecialize T::Type{<:KeyedList}) = _values_type(T)
+@inline values_type(@nospecialize(x::ListType)) = values_type(typeof(x))
+@inline values_type(@nospecialize(T::Type{<:KeyedList})) = _values_type(T)
+values_type(@nospecialize(T::Type{<:List})) = T
 
-@assume_effects :total _known_instance(T::DataType) = isdefined(T, :instance) ? getfield(T, :instance) : nothing
-known_instance(T::DataType) = _known_instance(T)
-known_instance(@nospecialize(x)) = _known_instance(typeof(x))
+@assume_effects :total function _known_instance(T::DataType)
+    if isdefined(T, :instance)
+        return getfield(T, :instance)
+    else
+        return nothing
+    end
+end
+@inline known_instance(T::DataType) = _known_instance(T)
+@inline known_instance(@nospecialize(x)) = _known_instance(typeof(x))
 
-Base.keytype(@nospecialize kl::KeyedList) = eltype(keys_type(kl))
-Base.keytype(@nospecialize T::Type{<:KeyedList}) = eltype(keys_type(T))
+Base.keytype(@nospecialize(x::ListType)) = eltype(keys_type(x))
+Base.keytype(@nospecialize(T::Type{<:KeyedList})) = eltype(keys_type(T))
+Base.keytype(@nospecialize(T::Type{<:List})) = Int
 
-Base.valtype(@nospecialize kl::KeyedList) = eltype(values_type(kl))
-Base.valtype(@nospecialize T::Type{<:KeyedList}) = eltype(values_type(T))
+Base.valtype(@nospecialize(x::ListType)) = valtype(typeof(x))
+Base.valtype(@nospecialize(T::Type{<:List})) = eltype(T)
+Base.valtype(@nospecialize(T::Type{<:KeyedList})) = eltype(values_type(T))
 
 Base.eachindex(@nospecialize(lst::List)) = static(1):slength(lst)
 @inline Base.keys(@nospecialize lst::List) = eachindex(lst)
@@ -168,7 +180,8 @@ ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus}) = known_length(t
 ArrayInterface.known_length(@nospecialize(T::Type{<:List})) = known_length(tail_type(T)) + 1
 ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList})) = known_length(keys_type(T))
 
-ArrayInterface.known_first(@nospecialize T::Type{<:ListType}) = known_instance(first_type(T))
+ArrayInterface.known_first(@nospecialize(x::ListType)) = known_instance(first_type(x))
+ArrayInterface.known_first(@nospecialize(T::Type{<:ListType})) = known_instance(first_type(T))
 
 Base.length(::List{Nil,Nil}) = 0
 @inline Base.length(@nospecialize(lst::List)) = length(tail(lst)) + 1
