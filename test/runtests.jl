@@ -17,6 +17,7 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(front(lst)) == List(static(1), static(2), static(3))
 @test @inferred(eltype(lst)) <: StaticInt
 @test isempty(@inferred(empty(lst)))
+@test eltype(typeof(empty(lst))) <: Any
 @test !isempty(lst)
 @test @inferred(ArrayInterface.known_first(lst)) === static(1)
 
@@ -57,6 +58,9 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 @test @inferred(keys(kl)) == List(:a, :b, :c, :d)
 @test @inferred(kl[static(:b)]) == 2
 @test kl == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4)
+@test @inferred(pushfirst(kl, :z => 0)) == KeyedList(:z => 0, :a => 1, :b => 2, :c => 3, :d => 4)
+@test @inferred(push(kl, :e => 5)) == KeyedList(:a => 1, :b => 2, :c => 3, :d => 4, :e => 5)
+@test @inferred(StaticLists.deleteat(KeyedList(:a => 1, :b => 2, :c => 3, :d => 4), :c)) == KeyedList(:a => 1, :b => 2, :d => 4)
 @test isempty(empty(kl))
 for (lst_i,kl_i) = zip(lst, kl)
     @test lst_i == kl_i[2]
@@ -77,3 +81,5 @@ elst = empty(lst)
 @test_throws ArgumentError last(elst)
 @test_throws ArgumentError tail(elst)
 @test_throws ArgumentError front(elst)
+@test_throws ArgumentError pop(elst)
+@test_throws ArgumentError popat(elst, 0)

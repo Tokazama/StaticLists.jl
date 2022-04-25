@@ -204,18 +204,27 @@ function Base.:(==)(@nospecialize(x::KeyedList),@nospecialize(y::KeyedList))
     ==(keys(x), keys(y)) && ==(values(x), values(y))
 end
 
-# TODO function deleteat(@nospecialize(lst::KeyedList), key) end
+"""
+    StaticLists.deleteat(list, key)
+
+Returns a `list` without the value corresponding to `key`.
+"""
 deleteat(::List{Nil,Nil}, key) = throw(ArgumentError("list must be non-empty"))
 function deleteat(@nospecialize(lst::List), i)
     @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
     unsafe_deleteat(lst, i)
 end
-@inline function unsafe_deleteat(@nospecialize(x), @nospecialize(i::Integer))
+@inline function unsafe_deleteat(@nospecialize(lst::List), @nospecialize(i::Integer))
     if isone(i)
-        return tail(x)
+        return tail(lst)
     else
-        return _List(first(x), unsafe_deleteat(tail(x), sub1(i)))
+        return _List(first(lst), unsafe_deleteat(tail(lst), sub1(i)))
     end
+end
+function deleteat(@nospecialize(kl::KeyedList), key)
+    i = find_first(==(key), keys(kl))
+    @boundscheck i != 0 || throw(BoundsError(kl, key))
+    _KeyedList(unsafe_deleteat(keys(kl), i), unsafe_deleteat(values(kl), i))
 end
 
 """
@@ -246,7 +255,7 @@ end
 
 Returns a tuple with the last item and the list without the last item.
 """
-pop(::List{Nil,Nil}) = error("List must be non-empty.")
+pop(::List{Nil,Nil}) = throw(ArgumentError("List must be non-empty."))
 pop(@nospecialize(lst::OneItem)) = first(lst), tail(lst)
 @inline function pop(@nospecialize(lst::List))
     item, t = pop(tail(lst))
@@ -275,7 +284,7 @@ end
 
 Returns the value at `key` and the list without the value.
 """
-popat(::List{Nil,Nil}) = throw(ArgumentError("list must be non-empty"))
+popat(::List{Nil,Nil}, i::Integer) = throw(ArgumentError("list must be non-empty"))
 function popat(@nospecialize(lst::List), i::Integer)
     @boundscheck 1 <= i <= length(lst) || throw(BoundsError(lst, i))
     unsafe_popat(lst, i)
