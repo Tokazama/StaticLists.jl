@@ -68,6 +68,7 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 for (lst_i,kl_i) = zip(lst, kl)
     @test lst_i == kl_i[2]
 end
+@test @inferred(ArrayInterface.known_first(KeyedList(List(static(:a)), List(static(1))))) == Pair(static(:a), static(1))
 
 io = IOBuffer()
 show(io, List(1, 2, 3, 4))
@@ -86,3 +87,5 @@ elst = empty(lst)
 @test_throws ArgumentError front(elst)
 @test_throws ArgumentError pop(elst)
 @test_throws ArgumentError popat(elst, 0)
+@test_throws ArgumentError StaticLists.popat(elst, 0)
+

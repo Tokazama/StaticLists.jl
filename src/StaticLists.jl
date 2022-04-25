@@ -78,9 +78,11 @@ end
     _KeyedList(tuple_to_list(static(keys(v))), tuple_to_list(values(v)))
 end
 
-Base.haskey(@nospecialize(kl::KeyedList), key) = in(key, keys(kl))
+const ListType = Union{List,KeyedList}
 
-Base.eltype(@nospecialize lst::List) = eltype(typeof(lst))
+Base.haskey(@nospecialize(kl::ListType), key) = in(key, keys(kl))
+
+Base.eltype(@nospecialize(lst::ListType)) = eltype(typeof(lst))
 Base.eltype(::Type{List{Nil,Nil}}) = Any
 Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
 @generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:List})) where {N}
@@ -96,10 +98,12 @@ Base.eltype(@nospecialize T::Type{<:List}) = _eltype(slength(T), T)
         return out
     end
 end
+Base.eltype(@nospecialize(T::Type{<:KeyedList})) = Pair{keytype(T),valtype(T)}
 
 @assume_effects :total _first_type(T::DataType) = @inbounds(T.parameters[1])
 first_type(@nospecialize lst::List) = first_type(typeof(lst))
 first_type(@nospecialize T::Type{<:List}) = _first_type(T)
+first_type(@nospecialize T::Type{<:KeyedList}) = Pair{first_type(keys_type(T)), first_type(values_type(T))}
 
 @assume_effects :total _tail_type(T::DataType) = @inbounds(T.parameters[2])
 tail_type(@nospecialize lst::List) = tail_type(typeof(lst))
@@ -113,8 +117,9 @@ keys_type(@nospecialize T::Type{<:KeyedList}) = _keys_type(T)
 values_type(@nospecialize kl::KeyedList) = values_type(typeof(kl))
 values_type(@nospecialize T::Type{<:KeyedList}) = _values_type(T)
 
-Base.eltype(@nospecialize kl::KeyedList) = eltype(typeof(kl))
-Base.eltype(@nospecialize T::Type{<:KeyedList}) = Pair{keytype(T),valtype(T)}
+@assume_effects :total _known_instance(T::DataType) = isdefined(T, :instance) ? getfield(T, :instance) : nothing
+known_instance(T::DataType) = _known_instance(T)
+known_instance(@nospecialize(x)) = _known_instance(typeof(x))
 
 Base.keytype(@nospecialize kl::KeyedList) = eltype(keys_type(kl))
 Base.keytype(@nospecialize T::Type{<:KeyedList}) = eltype(keys_type(T))
@@ -154,36 +159,16 @@ Base.isempty(@nospecialize(kl::KeyedList)) = isempty(keys(kl))
 Base.empty(@nospecialize(lst::List)) = EMPTY_LIST
 Base.empty(@nospecialize(kl::KeyedList)) = _KeyedList(EMPTY_LIST, EMPTY_LIST)
 
-ArrayInterface.known_length(@nospecialize(lst::List)) = known_length(typeof(lst))
+ArrayInterface.known_length(@nospecialize(lst::ListType)) = known_length(typeof(lst))
 ArrayInterface.known_length(::Type{List{Nil,Nil}}) = 0
 ArrayInterface.known_length(@nospecialize T::Type{<:OneItem}) = 1
 ArrayInterface.known_length(@nospecialize T::Type{<:TwoItems}) = 2
 # skipping the middle value helps with inference here
-function ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus})
-    known_length(tail_type(tail_type(T))) + 2
-end
+ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus}) = known_length(tail_type(tail_type(T))) + 2
 ArrayInterface.known_length(@nospecialize(T::Type{<:List})) = known_length(tail_type(T)) + 1
-function ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList}))
-    known_length(keys_type(T))
-end
+ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList})) = known_length(keys_type(T))
 
-@inline function ArrayInterface.known_first(@nospecialize T::Type{<:List})
-    f = first_type(T)
-    if isdefined(f, :instance)
-        return f.instance
-    else
-        return nothing
-    end
-end
-@inline function ArrayInterface.known_first(@nospecialize T::Type{<:KeyedList})
-    k = ArrayInterface.known_first(keys_type(T))
-    v = ArrayInterface.known_first(values_type(T))
-    if k === nothing || v === nothing
-        return nothing
-    else
-        return Pair(k, v)
-    end
-end
+ArrayInterface.known_first(@nospecialize T::Type{<:ListType}) = known_instance(first_type(T))
 
 Base.length(::List{Nil,Nil}) = 0
 @inline Base.length(@nospecialize(lst::List)) = length(tail(lst)) + 1
