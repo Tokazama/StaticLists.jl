@@ -130,8 +130,7 @@ end
 @inline known_instance(@nospecialize(x)) = _known_instance(typeof(x))
 
 Base.keytype(@nospecialize(x::ListType)) = eltype(keys_type(x))
-Base.keytype(@nospecialize(T::Type{<:KeyedList})) = eltype(keys_type(T))
-Base.keytype(@nospecialize(T::Type{<:List})) = Int
+Base.keytype(@nospecialize(T::Type{<:ListType})) = eltype(keys_type(T))
 
 Base.valtype(@nospecialize(x::ListType)) = valtype(typeof(x))
 Base.valtype(@nospecialize(T::Type{<:List})) = eltype(T)
@@ -213,6 +212,9 @@ end
     StaticLists.deleteat(list, key)
 
 Returns a `list` without the value corresponding to `key`.
+
+!!! warning
+    This is not part of the public API and may change without notice.
 """
 deleteat(::List{Nil,Nil}, key) = throw(ArgumentError("list must be non-empty"))
 function deleteat(@nospecialize(lst::List), i)
@@ -233,7 +235,7 @@ function deleteat(@nospecialize(kl::KeyedList), key)
 end
 
 """
-    StaticLists.pushfirst(list, item)
+    pushfirst(list, item)
 
 Returns a new list with `item` added to the front.
 """
@@ -244,9 +246,10 @@ pushfirst(@nospecialize(lst::List), @nospecialize(item)) = _List(item, lst)
 end
 
 """
-    StaticLists.push(list, item)
+    push(list, item)
 
 Returns a new list with `item` added to the end.
+
 """
 push(@nospecialize(lst::OneItem), @nospecialize(item)) = _List(first(lst), List(item))
 push(@nospecialize(lst::List), @nospecialize(item)) = _List(first(lst), push(tail(lst), item))
@@ -259,6 +262,9 @@ end
     StaticLists.pop(list) -> (last(list), Base.front(list))
 
 Returns a tuple with the last item and the list without the last item.
+
+!!! warning
+    This is not part of the public API and may change without notice.
 """
 pop(::List{Nil,Nil}) = throw(ArgumentError("List must be non-empty."))
 pop(@nospecialize(lst::OneItem)) = first(lst), tail(lst)
@@ -276,6 +282,9 @@ end
     StaticLists.popfirst(list) -> (first(list), Base.tail(list))
 
 Returns a tuple with the first item and the list without the first item.
+
+!!! warning
+    This is not part of the public API and may change without notice.
 """
 popfirst(@nospecialize(lst::List)) = first(lst), tail(lst)
 @inline function popfirst(@nospecialize(kl::KeyedList))
@@ -288,6 +297,9 @@ end
     StaticLists.popat(list, key) -> (list[key], StaticLists.delete(list, key))
 
 Returns the value at `key` and the list without the value.
+
+!!! warning
+    This is not part of the public API and may change without notice.
 """
 popat(::List{Nil,Nil}, i::Integer) = throw(ArgumentError("list must be non-empty"))
 function popat(@nospecialize(lst::List), i::Integer)

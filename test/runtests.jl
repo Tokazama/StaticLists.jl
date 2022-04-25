@@ -17,7 +17,8 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(tail(lst)) == List(static(2), static(3), static(4))
 @test @inferred(front(lst)) == List(static(1), static(2), static(3))
 @test @inferred(eltype(lst)) <: StaticInt
-@test @inferred(eltype(typeof(List(1)))) <: Int
+@test @inferred(keytype(typeof(lst))) <: Int
+@test @inferred(valtype(typeof(List(1)))) <: Int
 @test isempty(@inferred(empty(lst)))
 @test eltype(typeof(empty(lst))) <: Any
 @test !isempty(lst)
