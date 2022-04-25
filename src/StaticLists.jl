@@ -36,8 +36,6 @@ end
 
 const EMPTY_LIST = _List(nil, nil)
 const OneItem{T} = List{T,List{Nil,Nil}}
-const TwoItems{T1,T2} = List{T1,OneItem{T2}}
-const List2Plus{T1,T2,T3,L} = List{T1,List{T2,List{T3,L}}}
 
 tuple_to_list(@nospecialize(t::Tuple)) = _tuple_to_list(slength(t), t)
 @generated function _tuple_to_list(::StaticInt{N}, @nospecialize(t::Tuple)) where {N}
@@ -171,15 +169,23 @@ Base.isempty(@nospecialize(kl::KeyedList)) = isempty(keys(kl))
 Base.empty(@nospecialize(lst::List)) = EMPTY_LIST
 Base.empty(@nospecialize(kl::KeyedList)) = _KeyedList(EMPTY_LIST, EMPTY_LIST)
 
+# ArrayInterface.known_length
 ArrayInterface.known_length(@nospecialize(lst::ListType)) = known_length(typeof(lst))
 ArrayInterface.known_length(::Type{List{Nil,Nil}}) = 0
 ArrayInterface.known_length(@nospecialize T::Type{<:OneItem}) = 1
-ArrayInterface.known_length(@nospecialize T::Type{<:TwoItems}) = 2
-# skipping the middle value helps with inference here
-ArrayInterface.known_length(@nospecialize T::Type{<:List2Plus}) = known_length(tail_type(tail_type(T))) + 2
-ArrayInterface.known_length(@nospecialize(T::Type{<:List})) = known_length(tail_type(T)) + 1
+# skipping the middle value helps with inference but this only gets us to a length of ~40 
+const List2Plus{T1,T2,T3,L} = List{T1,List{T2,List{T3,L}}}
+const List4Plus{T1,T2,T3,T4,T5,L} = List2Plus{T1,T2,T3,List{T4,List{T5,L}}}
+const List8Plus{T1,T2,T3,T4,T5,T6,T7,T8,T9,L} = List{T1,List{T2,List{T3,List{T4,List{T5,List{T6,List{T7,List{T8,List{T9,L}}}}}}}}}
+const List16Plus{T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,T12,T13,T14,T15,T16,T17,L} = List{T1,List{T2,List{T3,List{T4,List{T5,List{T6,List{T7,List{T8,List{T9,List{T10,List{T11,List{T12,List{T13,List{T14,List{T15,List{T16,List{T17,L}}}}}}}}}}}}}}}}}
+ArrayInterface.known_length(@nospecialize(T::Type{<:List16Plus}))::Int = known_length(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(T))))))))))))))))) + 16
+ArrayInterface.known_length(@nospecialize(T::Type{<:List8Plus}))::Int = known_length(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(tail_type(T))))))))) + 8
+ArrayInterface.known_length(@nospecialize(T::Type{<:List4Plus}))::Int = known_length(tail_type(tail_type(tail_type(tail_type(T))))) + 4
+ArrayInterface.known_length(@nospecialize(T::Type{<:List2Plus}))::Int = known_length(tail_type(tail_type(T))) + 2
+ArrayInterface.known_length(@nospecialize(T::Type{<:List}))::Int = known_length(tail_type(T)) + 1
 ArrayInterface.known_length(@nospecialize(T::Type{<:KeyedList})) = known_length(keys_type(T))
 
+# ArrayInterface.known_first
 ArrayInterface.known_first(@nospecialize(x::ListType)) = known_instance(first_type(x))
 ArrayInterface.known_first(@nospecialize(T::Type{<:ListType})) = known_instance(first_type(T))
 
@@ -187,10 +193,11 @@ Base.length(::List{Nil,Nil}) = 0
 @inline Base.length(@nospecialize(lst::List)) = length(tail(lst)) + 1
 Base.length(@nospecialize(kl::KeyedList)) = length(keys(kl))
 
-Base.IteratorSize(@nospecialize T::Type{<:List}) = Base.HasLength()
-Base.IteratorSize(@nospecialize T::Type{<:KeyedList}) = Base.HasLength()
+Base.IteratorSize(@nospecialize(T::Type{<:ListType})) = Base.HasLength()
 
 Base.:(==)(::List{Nil,Nil}, ::List{Nil,Nil}) = true
+Base.:(==)(::List{Nil,Nil}, @nospecialize(y::List)) = false
+Base.:(==)(@nospecialize(x::List), ::List{Nil,Nil}) = false
 @inline function Base.:(==)(@nospecialize(x::List),@nospecialize(y::List))
     if first(x) == first(y)
         return ==(tail(x), tail(y))

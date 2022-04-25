@@ -17,11 +17,19 @@ lst = List(static(1), static(2), static(3), static(4))
 @test @inferred(tail(lst)) == List(static(2), static(3), static(4))
 @test @inferred(front(lst)) == List(static(1), static(2), static(3))
 @test @inferred(eltype(lst)) <: StaticInt
+@test @inferred(eltype(typeof(List(1)))) <: Int
 @test isempty(@inferred(empty(lst)))
 @test eltype(typeof(empty(lst))) <: Any
 @test !isempty(lst)
 @test @inferred(ArrayInterface.known_first(lst)) === static(1)
 @test @inferred(ArrayInterface.known_first(typeof(lst))) === static(1)
+@test iterate(empty(lst)) === nothing
+@test !=(List(1, 2), List(1, 3))
+@test !=(List(1, 2), List(1))
+@test !=(List(1), List(1, 2))
+
+lst2 = List(ntuple(static, 40)...)
+@test @inferred(ArrayInterface.known_length(lst2)) === 40
 
 lst = List(1, 2, 3, 4)
 @test @inferred(ArrayInterface.known_first(lst)) === nothing
@@ -42,6 +50,7 @@ inds = keys(lst)
 for (i,l) in zip(inds,lst)
     @test i == l
 end
+@test @inferred(Base.IteratorSize(typeof(lst))) === Base.HasLength()
 
 kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 3, 4))
 @test @inferred(keytype(kl)) <: StaticSymbol
@@ -69,7 +78,9 @@ kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 
 for (lst_i,kl_i) = zip(lst, kl)
     @test lst_i == kl_i[2]
 end
+@test iterate(empty(kl)) === nothing
 @test @inferred(ArrayInterface.known_first(KeyedList(List(static(:a)), List(static(1))))) == Pair(static(:a), static(1))
+@test @inferred(haskey(kl, :a))
 
 io = IOBuffer()
 show(io, List(1, 2, 3, 4))
@@ -88,5 +99,5 @@ elst = empty(lst)
 @test_throws ArgumentError front(elst)
 @test_throws ArgumentError pop(elst)
 @test_throws ArgumentError popat(elst, 0)
-@test_throws ArgumentError StaticLists.popat(elst, 0)
+@test_throws ArgumentError StaticLists.deleteat(elst, 0)
 
