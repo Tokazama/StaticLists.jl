@@ -28,7 +28,16 @@ lst = List(static(1), static(2), static(3), static(4))
 @test !=(List(1, 2), List(1, 3))
 @test !=(List(1, 2), List(1))
 @test !=(List(1), List(1, 2))
+@test findfirst(==(2), lst) == 2
 
+lst1 = List(1, 2, 3)
+@test @inferred(lst1[2]) == 2
+@test @inferred(Base.setindex(lst1, 4, 2)) == List(1, 4, 3)
+
+@test @inferred(ArrayInterface.known_length(List())) === 0
+@test @inferred(ArrayInterface.known_length(List(1))) === 1
+@test @inferred(ArrayInterface.known_length(List(1, 2))) === 2
+@test @inferred(ArrayInterface.known_length(List(1, 2, 3))) === 3
 lst2 = List(ntuple(static, 40)...)
 @test @inferred(ArrayInterface.known_length(lst2)) === 40
 
@@ -52,6 +61,7 @@ for (i,l) in zip(inds,lst)
     @test i == l
 end
 @test @inferred(Base.IteratorSize(typeof(lst))) === Base.HasLength()
+@test get(lst, 5, nothing) === nothing
 
 kl = KeyedList(List(static(:a), static(:b), static(:c), static(:d)), List(1, 2, 3, 4))
 @test @inferred(keytype(kl)) <: StaticSymbol
@@ -82,6 +92,8 @@ end
 @test iterate(empty(kl)) === nothing
 @test @inferred(ArrayInterface.known_first(KeyedList(List(static(:a)), List(static(1))))) == Pair(static(:a), static(1))
 @test @inferred(haskey(kl, :a))
+
+@test @inferred(Base.setindex(kl, 3, static(:b))) == KeyedList(static(:a) => 1, static(:b) => 3, static(:c) => 3, static(:d) => 4)
 
 io = IOBuffer()
 show(io, List(1, 2, 3, 4))
