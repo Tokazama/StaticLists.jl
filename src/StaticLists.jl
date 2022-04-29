@@ -2,9 +2,11 @@ module StaticLists
 
 using ArrayInterface
 using ArrayInterface: known_first, known_length
-import ArrayInterface: static_length as slength
+import ArrayInterface: static_length
 using Base: front, tail
 using Static
+
+const slength = static_length
 
 @static if isdefined(Base, Symbol("@assume_effects"))
     using Base: @assume_effects
@@ -25,7 +27,7 @@ const nil = Nil()
 """
     List(items...)
 
-A statically sized, singly linked list.
+A statically-sized, singly-linked list.
 """
 struct List{F,T}
     first::F
