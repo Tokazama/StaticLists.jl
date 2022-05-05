@@ -3,7 +3,7 @@ module StaticLists
 using Base: front, tail, isdone
 using Static
 
-export KeyedStaticList, StaticList, slist
+export KeyedStaticList, StaticList, list
 
 @static if isdefined(Base, Symbol("@assume_effects"))
     using Base: @assume_effects
@@ -45,41 +45,31 @@ struct StaticList{F,T,L}
     length::L
 end
 
-function StaticList(@nospecialize(f), @nospecialize(t::StaticList))
-    StaticList(f, t, slength(t) + static(1))
-end
-StaticList(@nospecialize(x::StaticList)) = x
-StaticList(@nospecialize(x::Tuple)) = _tuple_to_StaticList(StaticInt{nfields(x)}(), x)
-@generated function _tuple_to_StaticList(::StaticInt{N}, @nospecialize(t::Tuple)) where {N}
-    e = :($(slist()))
-    for i in N:-1:1
-        e = Expr(:call, :StaticList, :(@inbounds(getfield(t, $i))), e)
-    end
-    return e
-end
 const EmptyList = StaticList{Nil,Nil,StaticInt{0}}
+const OneItem{T} = StaticList{T,EmptyList,StaticInt{1}}
+const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
+const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3},StaticInt{3}}
+const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
+
+const none = StaticList(nil, nil, StaticInt(0))
 
 Base.reverse(@nospecialize(x::StaticList)) = _reverse(x, slength(x))
 @generated function _reverse(@nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
     blk = ntails_expr(N)
-    out = :($(slist()))
+    out = :none
     for i in 0:(N - 1)
-        out = :(StaticList(first($(Symbol(:x, i))), $(out)))
+        out = :(cons(first($(Symbol(:x, i))), $(out)))
     end
     push!(blk.args, out)
     return blk
 end
 
 # takes the first `N` values and attaches them to the new root/tail
-@generated function _reroot_chunk(
-    @nospecialize(x0::StaticList),
-    @nospecialize(root::StaticList),
-    ::StaticInt{N}
-) where {N}
+@generated function _reroot_chunk(@nospecialize(x0::StaticList), @nospecialize(r::StaticList), ::StaticInt{N}) where {N}
     blk = ntails_expr(N)
-    out = :(root)
+    out = :(r)
     for i in (N - 1):-1:0
-        out = :(StaticList(first($(Symbol(:x, i))), $(out)))
+        out = :(cons(first($(Symbol(:x, i))), $(out)))
     end
     push!(blk.args, out)
     return blk
@@ -87,24 +77,21 @@ end
 
 @inline function _reroot_chunk(@nospecialize(x0::StaticList), @nospecialize(root::StaticList), N::Int)
     if N === 1
-        return StaticList(first(x0), root)
+        return cons(first(x0), root)
     else
-        return StaticList(first(x0), _reroot_chunk(tail(x), root, N - 1))
+        return cons(first(x0), _reroot_chunk(tail(x), root, N - 1))
     end
 end
 
-
-include("slist.jl")
-
-struct NFirst{P,L}
-    parent::P
-    length::L
+@generated function _genmap(@nospecialize(f), @nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
+    blk = ntails_expr(N)
+    out = :none
+    for i in (N - 1):-1:0
+        out = :(cons(f(first($(Symbol(:x, i)))), $(out)))
+    end
+    push!(blk.args, out)
+    return blk
 end
-Base.parent(@nospecialize x::NFirst) = getfield(x, :parent)
-
-const OneItem = Union{StaticList{T where T,EmptyList,StaticInt{1}}, NFirst{P where P,StaticInt{1}}}
-
-const KeylessList = Union{StaticList,NFirst}
 
 """
     KeyedStaticList(items::Pair...)
@@ -116,27 +103,22 @@ struct KeyedStaticList{K,V}
     keys::K
     values::V
 
-    function KeyedStaticList(@nospecialize(k::KeylessList), @nospecialize(v::KeylessList))
+    function KeyedStaticList(@nospecialize(k::StaticList), @nospecialize(v::StaticList))
         length(k) === length(v) || throw(ArgumentError("keys and values are of different length"))
         new{typeof(k),typeof(v)}(k, v)
     end
 end
-KeyedStaticList(@nospecialize(x::Pair)) = KeyedStaticList(slist(x[1]), slist(x[2]))
+KeyedStaticList(@nospecialize(x::Pair)) = KeyedStaticList(list(x[1]), list(x[2]))
 KeyedStaticList(@nospecialize(x::Pair), @nospecialize(xs::Pair...)) = pushfirst(KeyedStaticList(xs...), x)
-@inline function KeyedStaticList(; @nospecialize(kwargs...))
-    v = values(kwargs)
-    KeyedStaticList(StaticList(static(keys(v))), StaticList(values(v)))
-end
 
-const ListType = Union{KeylessList,KeyedStaticList}
+const ListType = Union{StaticList,KeyedStaticList}
 
 """
-    slist(args...)
+    list(args...)
 
 Composes a list where each argument is a member of the list.
 """
-@inline slist() = StaticList(nil, nil, StaticInt{0}())
-@inline slist(@nospecialize(x), @nospecialize(args...)) = StaticList(x, StaticList(args))
+list
 
 @generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:StaticList})) where {N}
     if N === 1
@@ -166,31 +148,22 @@ end
 """
     insert
 """
-function insert(
-    @nospecialize(x::KeylessList),
-    @nospecialize(v),
-    @nospecialize(i::Integer)
-)
+function insert(@nospecialize(x::StaticList), @nospecialize(v), @nospecialize(i::Integer))
     @boundscheck checkbounds(x, i)
     unsafe_insert(x, v, i)
 end
 @inline function unsafe_insert(@nospecialize(x::StaticList), @nospecialize(v), i::Int)
     if i === 1
-        return StaticList(v, x)
+        return cons(v, x)
     else
-        return StaticList(first(x), unsafe_insert(tail(x), v, i - 1))
+        return cons(first(x), unsafe_insert(tail(x), v, i - 1))
     end
 end
-@generated function unsafe_insert(
-    @nospecialize(x::StaticList),
-    @nospecialize(v),
-    ::StaticInt{N}
-) where {N}
-
+@generated function unsafe_insert(@nospecialize(x::StaticList), @nospecialize(v), ::StaticInt{N}) where {N}
     out = ntails_expr(N)
-    r = :(StaticList(v, $(Symbol(:x, N-1))))
+    r = :(cons(v, $(Symbol(:x, N-1))))
     for i in (N - 2):-1:0
-        r = :(StaticList(first($(Symbol(:x, i))), $r))
+        r = :(cons(first($(Symbol(:x, i))), $r))
     end
     push!(out.args, r)
     return out
@@ -210,7 +183,7 @@ deleteat
     out = ntails_expr(N)
     r = :(Base.tail($(Symbol(:x, N-1))))
     for i in (N - 2):-1:0
-        r = :(StaticList(first($(Symbol(:x, i))), $r))
+        r = :(cons(first($(Symbol(:x, i))), $r))
     end
     push!(out.args, r)
     return out
@@ -228,8 +201,8 @@ pushfirst
 
 Returns a new StaticList with `item` added to the end.
 """
-push(x::EmptyList, item) = StaticList(item, x)
-@inline push(x::StaticList, item) = StaticList(first(x), push(tail(x), item))
+push(x::EmptyList, item) = cons(item, x)
+@inline push(x::StaticList, item) = cons(first(x), push(tail(x), item))
 @inline function push(@nospecialize(x::KeyedStaticList), kv::Pair)
     KeyedStaticList(push(keys(x), getfield(kv, 1)), push(values(x), getfield(kv, 2)))
 end
@@ -267,7 +240,7 @@ popat
     out = ntails_expr(N)
     r = :(Base.tail($(Symbol(:x, N-1))))
     for i in (N - 2):-1:0
-        r = :(StaticList(first($(Symbol(:x, i))), $r))
+        r = :(cons(first($(Symbol(:x, i))), $r))
     end
     push!(out.args, :(first($(Symbol(:x, N - 1))), $r))
     return out
@@ -310,7 +283,7 @@ end
     :($(StaticInt{find_first(F.instance, L.instance)}()))
 end
 
-@generated function _unsafe_getindex(@nospecialize(lst::StaticList), ::StaticInt{N}) where {N}
+@generated function unsafe_getindex(@nospecialize(lst::StaticList), ::StaticInt{N}) where {N}
     e = :lst
     pos = 1
     while pos !== N
@@ -322,9 +295,9 @@ end
 
 @generated function unsafe_setindex(@nospecialize(x0::StaticList), v, ::StaticInt{N}) where {N}
     out = ntails_expr(N)
-    r = :(StaticList(v, Base.tail($(Symbol(:x, N-1)))))
+    r = :(cons(v, Base.tail($(Symbol(:x, N-1)))))
     for i in (N - 2):-1:0
-        r = :(StaticList(first($(Symbol(:x, i))), $r))
+        r = :(cons(first($(Symbol(:x, i))), $r))
     end
     push!(out.args, r)
     return out
@@ -368,13 +341,24 @@ end
 # TODO map(::KeyedStaticList)
 @nospecialize
 
+@inline cons(x, y) = cons(x, StaticList(x, none, StaticInt(1)))
+@inline cons(x, ::EmptyList) = StaticList(x, none, StaticInt(1))
+@inline cons(x, y::OneItem) = StaticList(x, y, StaticInt(2))
+@inline cons(x, y::TwoItems) = StaticList(x, y, StaticInt(3))
+@inline cons(x, y::ThreeItems) = StaticList(x, y, StaticInt(4))
+@inline cons(x, y::FourItems) = StaticList(x, y, StaticInt(5))
+@inline cons(x, y::StaticList) = StaticList(x, y, StaticInt(1) + slength(y))
+
+list() = none
+@inline list(x, args...) = cons(x, list(args...))
+
 Base.eltype(x::ListType) = eltype(typeof(x))
 Base.eltype(::Type{EmptyList}) = Union{}
 Base.eltype(T::Type{<:StaticList}) = _eltype(slength(T), T)
 Base.eltype(T::Type{<:KeyedStaticList}) = Pair{keytype(T),valtype(T)}
 
 Base.valtype(x::ListType) = valtype(typeof(x))
-Base.valtype(T::Type{<:KeylessList}) = eltype(T)
+Base.valtype(T::Type{<:StaticList}) = eltype(T)
 Base.valtype(T::Type{<:KeyedStaticList}) = eltype(T.parameters[2])
 
 Base.IteratorSize(T::Type{<:ListType}) = Base.HasLength()
@@ -383,7 +367,7 @@ Base.IteratorSize(T::Type{<:ListType}) = Base.HasLength()
 # keys
 ###
 Base.keytype(x::ListType) = keytype(typeof(x))
-Base.keytype(T::Type{<:KeylessList}) = Int
+Base.keytype(T::Type{<:StaticList}) = Int
 Base.keytype(T::Type{<:KeyedStaticList}) = eltype(T.parameters[1])
 
 Base.haskey(x::ListType, key) = in(key, keys(x))
@@ -395,9 +379,8 @@ Base.keys(x::KeyedStaticList) = getfield(x, :keys)
 ###
 # Indexing
 ###
-Base.getindex(lst::KeylessList, ::Colon) = collect(lst)
+Base.getindex(x::StaticList, ::Colon) = x
 Base.collect(x::StaticList) = x
-Base.collect(x::NFirst) = _reroot_chunk(parent(x), slist(), slength(x))
 Base.collect(x::KeyedStaticList) = KeyedStaticList(collect(keys(x)), collect(values(x)))
 
 function Base.getindex(lst::KeyedStaticList, i)
@@ -405,14 +388,13 @@ function Base.getindex(lst::KeyedStaticList, i)
     @boundscheck out === nil && throw(BoundsError(lst, i))
     return out
 end
-@inline function Base.getindex(lst::KeylessList, i::Integer)
+@inline function Base.getindex(lst::StaticList, i::Integer)
     @boundscheck checkbounds(lst, i)
-    _unsafe_getindex(lst, i)
+    unsafe_getindex(lst, i)
 end
-# TODO Base.getindex(lst::KeylessList, i::AbstractUnitRange)
-_unsafe_getindex(x::NFirst, i::Integer) = _unsafe_getindex(parent(x), i)
-@inline function _unsafe_getindex(@nospecialize(lst::StaticList), i::Int)
-    i === 1 ? first(lst) : _unsafe_getindex(tail(lst), i - 1)
+# TODO Base.getindex(lst::StaticList, i::AbstractUnitRange)
+@inline function unsafe_getindex(lst::StaticList, i::Int)
+    i === 1 ? first(lst) : unsafe_getindex(tail(lst), i - 1)
 end
 
 function Base.setindex(x::ListType, v, i::Integer)
@@ -420,19 +402,15 @@ function Base.setindex(x::ListType, v, i::Integer)
     unsafe_setindex(x, v, i)
 end
 @inline function unsafe_setindex(x::StaticList, v, i::Int)
-    if i === 1
-        return StaticList(v, tail(x))
-    else
-        return StaticList(first(x), unsafe_setindex(tail(x), v, i - 1))
-    end
+    i === 1 ? cons(v, tail(x)) : cons(first(x), unsafe_setindex(tail(x), v, i - 1))
 end
 function Base.setindex(kl::KeyedStaticList, v, key)
     vs = Base.setindex(values(kl), v, maybe_static_find_first(==(key), keys(kl)))
     KeyedStaticList(keys(kl), vs)
 end
 
-@inline function Base.get(lst::KeylessList, i::Integer, d)
-    checkbounds(Bool, lst, i) ? _unsafe_getindex(lst, i) : d
+@inline function Base.get(lst::StaticList, i::Integer, d)
+    checkbounds(Bool, lst, i) ? unsafe_getindex(lst, i) : d
 end
 # TODO benchmark and test this thing
 @inline function Base.get(kl::KeyedStaticList, key, d)
@@ -450,7 +428,7 @@ end
     if i === 1
         return tail(lst)
     else
-        return StaticList(first(lst), unsafe_deleteat(tail(lst), i - 1))
+        return cons(first(lst), unsafe_deleteat(tail(lst), i - 1))
     end
 end
 function deleteat(kl::KeyedStaticList, key)
@@ -460,7 +438,7 @@ function deleteat(kl::KeyedStaticList, key)
 end
 
 
-pushfirst(x::StaticList, item) = StaticList(item, x)
+pushfirst(x::StaticList, item) = cons(item, x)
 @inline function pushfirst(x::KeyedStaticList, kv::Pair)
     KeyedStaticList(pushfirst(keys(x), getfield(kv, 1)), pushfirst(values(x), getfield(kv, 2)))
 end
@@ -489,7 +467,7 @@ end
         return first(x), tail(x)
     else
         f, t = unsafe_popat(tail(x), i - 1)
-        return f, StaticList(first(x), t)
+        return f, cons(first(x), t)
     end
 end
 
@@ -512,7 +490,7 @@ function Base.:(==)(x::ListType, y::ListType)
     end
 end
 
-@inline function Base.in(x, lst::KeylessList)
+@inline function Base.in(x, lst::StaticList)
     for i in lst
         i == x && return true
     end
@@ -521,13 +499,13 @@ end
 
 @inline Base.isempty(x::ListType) = length(x) === 0
 
-Base.empty(x::StaticList) = slist()
+Base.empty(x::StaticList) = none
 Base.empty(x::KeyedStaticList) = KeyedStaticList(empty(keys(x)), empty(values(x)))
 
 slength(T::DataType) = T.parameters[3]()
-slength(x::KeylessList) = getfield(x, :length)
+slength(x::StaticList) = getfield(x, :length)
 slength(x::KeyedStaticList) = slength(keys(x))
-@inline Base.length(x::KeylessList) = Int(slength(x))
+@inline Base.length(x::StaticList) = Int(slength(x))
 @inline Base.length(x::KeyedStaticList) = length(keys(x))
 
 ###
@@ -536,17 +514,15 @@ slength(x::KeyedStaticList) = slength(keys(x))
 function Base.tail(::EmptyList)
     throw(ArgumentError("Cannot call Base.tail on an empty StaticList"))
 end
-Base.tail(::OneItem) = slist()
+Base.tail(::OneItem) = none
 Base.tail(x::StaticList) = getfield(x, :tail)
-Base.tail(x::NFirst) = (len = slength(x); NFirst(tail(parent(x)), len - one(len)))
 @inline Base.tail(x::KeyedStaticList) = KeyedStaticList(tail(keys(x)), tail(values(x)))
 
 @noinline function Base.front(::EmptyList)
     throw(ArgumentError("Cannot call Base.front on an empty StaticList"))
 end
-@inline Base.front(::OneItem) = slist()
-@inline Base.front(x::StaticList) = NFirst(x, slength(x) - static(1))
-@inline Base.front(x::NFirst) = NFirst(parent(x), slength(x) - static(1))
+@inline Base.front(::OneItem) = none
+@inline Base.front(x::StaticList) = first(x, slength(x) - static(1))
 # FIXME this should be able to handle different types of lists
 @inline function Base.front(x::KeyedStaticList)
     KeyedStaticList(front(keys(x)), front(values(x)))
@@ -558,11 +534,7 @@ end
 Base.first(x::StaticList) = getfield(x, :first)
 function Base.first(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
-    return NFirst(x, i)
-end
-function Base.first(x::NFirst, i::Integer)
-    @boundscheck checkbounds(x, i)
-    return NFirst(parent(x), i)
+    _reroot_chunk(x, none, i)
 end
 @inline Base.first(x::KeyedStaticList) = Pair(first(keys(x)), first(values(x)))
 
@@ -571,7 +543,7 @@ end
 end
 Base.last(x::StaticList) = @inbounds x[slength(x)]
 @inline Base.last(x::KeyedStaticList) = Pair(last(keys(x)), last(values(x)))
-function Base.last(x::KeylessList, i::Integer)
+function Base.last(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
     unsafe_last(x, i)
 end
@@ -582,14 +554,13 @@ end
         return unsafe_last(tail(x), i)
     end
 end
-unsafe_last(x::NFirst, i::Integer) = NFirst(unsafe_last(parent(x), i), slength(x) - i)
 
 Base.values(x::StaticList) = x
 Base.values(x::KeyedStaticList) = getfield(x, :values)
 
-Base.checkbounds(x::KeylessList, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
-Base.checkbounds(::Type{Bool}, x::KeylessList, i::Integer) = 1 <= i <= slength(x)
-function Base.checkbounds(::Type{Bool}, x::KeylessList, i::AbstractUnitRange)
+Base.checkbounds(x::StaticList, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
+Base.checkbounds(::Type{Bool}, x::StaticList, i::Integer) = 1 <= i <= slength(x)
+function Base.checkbounds(::Type{Bool}, x::StaticList, i::AbstractUnitRange)
     checkbounds(Bool, x, first(x)) && checkbounds(Bool, x, last(x))
 end
 
@@ -599,7 +570,7 @@ Base.isdone(x::KeyedStaticList, s) = isempty(getfield(s, 1))
 Base.iterate(::EmptyList) = nothing
 Base.iterate(lst::StaticList) = first(lst), tail(lst)
 @inline function Base.iterate(x::StaticList, state)
-    if Base.isdone(x, state)
+    if isdone(x, state)
         return nothing
     else
         return first(state), tail(state)
@@ -612,31 +583,21 @@ end
         return Pair(first(getfield(s, 1)), first(getfield(s, 2))), (tail(getfield(s, 1)), tail(getfield(s, 2)))
     end
 end
-@inline function Base.iterate(x::NFirst, s=(parent(x), length(x)))
-    len = getfield(s, 2)
-    if len === 0
-        return nothing
-    else
-        lst = getfield(s, 1)
-        return first(lst), (tail(lst), len - 1)
-    end
-end
-
 ###
 # Mapping/Reducing
 ###
-Base.filter(f, ::EmptyList) = slist()
+Base.filter(f, ::EmptyList) = none
 @inline function Base.filter(f, lst::StaticList)
     fst = first(lst)
     if f(fst)
-        return StaticList(fst, filter(f, tail(lst)))
+        return cons(fst, filter(f, tail(lst)))
     else
         return filter(f, tail(lst))
     end
 end
 
 Base.map(f, x::EmptyList) = x
-@inline Base.map(f, lst::StaticList) = mapfoldr(f, StaticList, lst, init=slist())
+@inline Base.map(f, x::StaticList) = _genmap(f, x, slength(x))
 
 @inline function Base.mapfoldl(f, op, x::StaticList; init=Base._InitialValue())
     _generated_mapfoldl(f, op, x::StaticList, init, slength(x))
@@ -648,10 +609,7 @@ end
 Base.show(io::IO, x::ListType) = show(io, MIME"text/plain"(), x)
 Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(out, "nil")
 @noinline function Base.show(io::IO, m::MIME"text/plain", x::StaticList)
-    print(io, "slist(" * str_list(x) * ")")
-end
-@noinline function Base.show(io::IO, m::MIME"text/plain", x::NFirst)
-    print(io, "NFirst(" * str_list(x) * ")")
+    print(io, "list(" * str_list(x) * ")")
 end
 @noinline function Base.show(io::IO, m::MIME"text/plain", x::KeyedStaticList)
     print(io, "KeyedStaticList(" * str_list(x) * ")")
