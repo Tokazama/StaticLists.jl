@@ -1,6 +1,6 @@
 module StaticLists
 
-using Base: front, tail, isdone
+using Base: front, tail
 using Base.Iterators: take
 using Static
 
@@ -20,8 +20,50 @@ end
 @inline known_instance(T::DataType) = _known_instance(T)
 @inline known_instance(@nospecialize(x)) = _known_instance(typeof(x))
 
+
+const ONE = static(1)
+const TWO = static(2)
+const THREE = static(3)
+const FOUR = static(4)
+
 struct Nil end
+
 const nil = Nil()
+
+"""
+    StaticList(first, tail)
+
+A statically-sized, singly-linked StaticList.
+"""
+struct StaticList{F,T,L}
+    first::F
+    tail::T
+    length::L
+end
+
+const None = StaticList{Nil,Nil,StaticInt{0}}
+const none = StaticList(nil, nil, StaticInt(0))
+
+const OneItem{T} = StaticList{T,Nil,StaticInt{1}}
+const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
+const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3},StaticInt{3}}
+const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
+
+const RevList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
+const RevTwo{T1,T2} = RevList{T2,OneItem{T1},StaticInt{2}}
+const RevThree{T1,T2,T3} = RevList{T3,TwoItems{T2,T1},StaticInt{3}}
+const RevFour{T1,T2,T3,T4} = RevList{T4,ThreeItems{T3,T2,T1},StaticInt{4}}
+
+const EmptyList = Union{None,RevList{None}}
+
+struct NFirst{P,L}
+    parent::P
+    length::L
+end
+
+const ListType = Union{NFirst,StaticList,RevList}
+
+@nospecialize
 
 # decomposes into a block of symbols up to the `N`th position
 # ntails_expr(3) ->
@@ -40,35 +82,50 @@ function ntails_expr(N::Int)
     out
 end
 
-"""
-    StaticList(first, tail)
 
-A statically-sized, singly-linked StaticList.
+Base.parent(x::StaticList) = x
+Base.parent(x::Union{NFirst,RevList}) = getfield(x, 1)
+
 """
-struct StaticList{F,T,L}
-    first::F
-    tail::T
-    length::L
+    list(args...)
+
+Composes a list where each argument is a member of the list.
+"""
+list() = none
+# this is a trick to speed up compilation of the first item
+@generated list(x) = :(StaticList(x, $nil, $ONE))
+@inline list(@nospecialize(x), @nospecialize(args...)) = cons(x, list(args...))
+
+@inline cons(x, y) = cons(x, list(y))
+@inline cons(x, ::None) = list(x)
+@generated cons(x, y::OneItem) = :(StaticList(x, y, $TWO))
+@generated cons(x, y::TwoItems) = :(StaticList(x, y, $THREE))
+@generated cons(x, y::ThreeItems) = :(StaticList(x, y, $FOUR))
+@inline cons(x, y::StaticList) = StaticList(x, y, ONE + slength(y))
+@inline cons(x::StaticList, y) = unsafe_insert(x, slength(x) + ONE, y)
+#@inline cons(x::StaticList, y::StaticList) = cat(x, y)
+
+Base.values(x::Union{NFirst,StaticList,RevList}) = x
+
+Base.eltype(x::ListType) = eltype(typeof(x))
+Base.eltype(T::Type{<:NFirst}) = eltype(T.parameters[1])
+Base.eltype(::Type{<:EmptyList}) = Union{}
+Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
+Base.eltype(T::Type{<:StaticList}) = _eltype(slength(T), T)
+
+###
+# Indexing
+###
+Base.checkbounds(x::ListType, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
+Base.checkbounds(::Type{Bool}, x::ListType, i::Integer) = 1 <= i <= slength(x)
+function Base.checkbounds(::Type{Bool}, x::StaticList, i::AbstractUnitRange)
+    checkbounds(Bool, x, first(x)) && checkbounds(Bool, x, last(x))
 end
 
-const RevList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
+@inline Base.eachindex(x::StaticList) = Base.OneTo(length(x))
 
-const EmptyList = Union{StaticList{Nil,Nil,StaticInt{0}},RevList{Nil,Nil,StaticInt{0}}}
-const OneItem{T} = StaticList{T,StaticList{Nil,Nil,StaticInt{0}},StaticInt{1}}
-const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
-const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3},StaticInt{3}}
-const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
-
-const none = StaticList(nil, nil, StaticInt(0))
-
-struct NFirst{P,L}
-    parent::P
-    length::L
-end
-
-const ListType = Union{NFirst,StaticList,RevList}
-
-@generated function _reverse(@nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
+Base.collect(x::RevList) = _reverse(x, slength(x))
+@generated function _reverse(x0::StaticList, ::StaticInt{N}) where {N}
     blk = ntails_expr(N)
     out = :none
     for i in 0:(N - 1)
@@ -77,9 +134,10 @@ const ListType = Union{NFirst,StaticList,RevList}
     push!(blk.args, out)
     return blk
 end
-
+Base.collect(x::StaticList) = x
 # takes the first `N` values and attaches them to the new root/tail
-@generated function _reroot(@nospecialize(x0::StaticList), @nospecialize(root::StaticList), ::StaticInt{N}) where {N}
+Base.collect(x::NFirst) = _reroot(parent(x), nil, slength(x))
+@generated function _reroot(x0::StaticList, root::StaticList, ::StaticInt{N}) where {N}
     blk = ntails_expr(N)
     out = :root
     for i in (N - 1):-1:0
@@ -88,222 +146,17 @@ end
     push!(blk.args, out)
     return blk
 end
-
-@inline function _reroot(@nospecialize(x0::StaticList), @nospecialize(root::StaticList), N::Int)
+@inline function _reroot(x0::StaticList, root::StaticList, N::Int)
     N === 1 ? cons(first(x0), root) : cons(first(x0), _reroot(tail(x), root, N - 1))
 end
 
-"""
-    list(args...)
-
-Composes a list where each argument is a member of the list.
-"""
-list() = none
-@inline list(@nospecialize(x), @nospecialize(args...)) = cons(x, list(args...))
-
-@generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:StaticList})) where {N}
-    if N === 1
-        return :(T.parameters[1])
-    else
-        out = :(T.parameters[1])
-        t = :(T.parameters[2])
-        for _ in 1:(N-1)
-            out = Expr(:call, :typejoin, out, :($(t).parameters[1]))
-            t = :($(t).parameters[2])
-        end
-        return out
-    end
-end
-
-@inline _shrinkbeg(@nospecialize(x::StaticList), N::Int) = N === 1 ? x : _shrinkbeg(tail(x), N - 1)
-@generated function _shrinkbeg(@nospecialize(x::StaticList), ::StaticInt{N}) where {N}
-    out = :x
-    for _ in 1:(N - 1)
-        out = :(tail($(out)))
-    end
-    Expr(:block, Expr(:meta, :inline), out)
-end
-
-"""
-    insert(list, index, item) -> out
-
-Returns a list where `item` is inserted at `index`. `index` is the index of item in `out`.
-"""
-@inline function insert(@nospecialize(x::StaticList), @nospecialize(i::Integer), @nospecialize(v))
-    @boundscheck 1 <= i <= (length(x) + 1)
-    unsafe_insert(x, i, v)
-end
-@inline unsafe_insert(::EmptyList, ::Int, @nospecialize(v)) = list(v)
-@inline function unsafe_insert(@nospecialize(x::OneItem), i::Int, @nospecialize(v))
-    i === 1 ? cons(v, x) : list(first(x), v)
-end
-@inline function unsafe_insert(@nospecialize(x::StaticList), i::Int, @nospecialize(v))
-    i === 1 ? cons(v, x) : cons(first(x), unsafe_insert(tail(x), i - 1, v))
-end
-@generated function unsafe_insert(@nospecialize(x0::StaticList), ::StaticInt{N}, @nospecialize(v)) where {N}
-    out = ntails_expr(N - 1)
-    r = :(cons(v, $(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
-    end
-    push!(out.args, r)
-    return out
-end
-
-"""
-    deleteat(list, index)
-
-Returns a list without the value corresponding to `index`.
-"""
-function deleteat(@nospecialize(x::StaticList), @nospecialize(i::Integer))
-    @boundscheck checkbounds(x, i)
-    unsafe_deleteat(x, i)
-end
-unsafe_deleteat(@nospecialize(x::OneItem), i::Int) = none
-@inline function unsafe_deleteat(@nospecialize(x::TwoItems), i::Int)
-    i === 1 ? tail(x) : cons(first(x), none)
-end
-@inline function unsafe_deleteat(@nospecialize(x::StaticList), i::Int)
-    i === 1 ? tail(x) : cons(first(x), unsafe_deleteat(tail(x), i - 1))
-end
-@generated function unsafe_deleteat(@nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
-    out = ntails_expr(N)
-    r = :(Base.tail($(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
-    end
-    push!(out.args, r)
-    return out
-end
-
-"""
-    StaticLists.popat(StaticList, key) -> (StaticList[key], StaticLists.delete(StaticList, key))
-
-Returns the value at `key` and the StaticList without the value.
-
-!!! warning
-    This is not part of the public API and may change without notice.
-"""
-function popat(@nospecialize(x::StaticList), @nospecialize(i::Integer))
-    @boundscheck checkbounds(x, i)
-    unsafe_popat(x, i)
-end
-@inline unsafe_popat(@nospecialize(x::OneItem), i::Int) = first(x), none
-@inline function unsafe_popat(@nospecialize(x::TwoItems), i::Int)
-    i === 1 ? (first(x), tail(x)) : (last(x), cons(first(x), none))
-end
-@inline function unsafe_popat(@nospecialize(x::StaticList), i::Int)
-    if i === 1
-        return first(x), tail(x)
-    else
-        f, t = unsafe_popat(tail(x), i - 1)
-        return f, cons(first(x), t)
-    end
-end
-@generated function unsafe_popat(@nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
-    out = ntails_expr(N)
-    r = :(Base.tail($(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
-    end
-    push!(out.args, :(first($(Symbol(:x, N - 1))), $r))
-    return out
-end
-
-@generated function unsafe_setindex(@nospecialize(x0::StaticList), @nospecialize(v), ::StaticInt{N}) where {N}
-    out = ntails_expr(N)
-    r = :(cons(v, Base.tail($(Symbol(:x, N-1)))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
-    end
-    push!(out.args, r)
-    return out
-end
-
-@generated function _genmap(@nospecialize(f), @nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
-    blk = ntails_expr(N)
-    out = :none
-    for i in (N - 1):-1:0
-        out = :(cons(f(first($(Symbol(:x, i)))), $(out)))
-    end
-    push!(blk.args, out)
-    return blk
-end
-@generated function _mapfoldl(f, op, @nospecialize(x0::StaticList), init::I, ::StaticInt{N}) where {I,N}
-    out = ntails_expr(N)
-    if I <: Nil
-        e = :(f(first($(Symbol(:x, 0)))))
-        idx = 1
-    else
-        e = :init
-        idx = 0
-    end
-    for i in idx:(N - 1)
-        e = :(op($(e), f(first($(Symbol(:x, i))))))
-    end
-    push!(out.args, e)
-    return out
-end
-@generated function _mapfoldr(f, op, @nospecialize(x0::StaticList), init::I, ::StaticInt{N}) where {I,N}
-    out = ntails_expr(N)
-    if I <: Nil
-        e = :(f(first($(Symbol(:x, N - 1)))))
-        idx = N - 2
-    else
-        e = :init
-        idx = N - 1
-    end
-
-    for i in idx:-1:0
-        xsym = Symbol(:x, i)
-        e = :(op(f(first($xsym)), $(e)))
-    end
-    push!(out.args, e)
-    return out
-end
-
-@nospecialize
-
-Base.parent(x::StaticList) = x
-Base.parent(x::Union{NFirst,RevList}) = getfield(x, 1)
-
-Base.values(x::Union{NFirst,StaticList,RevList}) = x
-
-@inline cons(x, y) = cons(x, StaticList(x, none, StaticInt(1)))
-@inline cons(x, ::EmptyList) = StaticList(x, none, StaticInt(1))
-@inline cons(x, y::OneItem) = StaticList(x, y, StaticInt(2))
-@inline cons(x, y::TwoItems) = StaticList(x, y, StaticInt(3))
-@inline cons(x, y::ThreeItems) = StaticList(x, y, StaticInt(4))
-@inline cons(x, y::FourItems) = StaticList(x, y, StaticInt(5))
-@inline cons(x, y::StaticList) = StaticList(x, y, StaticInt(1) + slength(y))
-@inline cons(x::StaticList, y) = unsafe_insert(x, slength(x) + StaticInt(1), y)
-@inline cons(x::StaticList, y::StaticList) = cat(x, y)
-
-Base.eltype(x::ListType) = eltype(typeof(x))
-Base.eltype(T::Type{<:NFirst}) = eltype(T.parameters[1])
-Base.eltype(::Type{EmptyList}) = Union{}
-Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
-Base.eltype(T::Type{<:StaticList}) = _eltype(slength(T), T)
-
-###
-# Indexing
-###
-Base.checkbounds(x::StaticList, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
-Base.checkbounds(::Type{Bool}, x::StaticList, i::Integer) = 1 <= i <= slength(x)
-function Base.checkbounds(::Type{Bool}, x::StaticList, i::AbstractUnitRange)
-    checkbounds(Bool, x, first(x)) && checkbounds(Bool, x, last(x))
-end
-
-@inline Base.eachindex(x::StaticList) = Base.OneTo(length(x))
-
-Base.collect(x::RevList) = _reverse(x, slength(x))
-Base.collect(x::NFirst) = _reroot(parent(x), none, slength(x))
-Base.collect(x::StaticList) = x
-
-Base.getindex(x::StaticList, i::StaticInt) = (@boundscheck checkbounds(x, i); first(_shrinkbeg(x, i)))
 Base.getindex(x::ListType, ::Colon) = collect(x)
-function Base.getindex(x::ListType, i::Integer)
-    @boundscheck checkbounds(parent(x), i)
+function Base.getindex(x::RevList, i::Integer)
+    @boundscheck checkbounds(x, i)
+    return _getindex(parent(x), (slength(x) + ONE) - i)
+end
+function Base.getindex(x::Union{StaticList,NFirst}, i::Integer)
+    @boundscheck checkbounds(x, i)
     return _getindex(parent(x), i)
 end
 @inline _getindex(x::OneItem, ::Int) = first(x)
@@ -312,27 +165,42 @@ end
     if i === 1
         return first(x)
     elseif i === 2
-        return first(tail(x))
+        return @inbounds x[TWO]
     else
-        return first(tail(tail(x)))
+        return @inbounds x[THREE]
     end
 end
 @inline _getindex(x::StaticList, i::Int) = i === 1 ? first(x) : _getindex(tail(x), i - 1)
 @inline _getindex(x::StaticList, i::StaticInt) = first(_shrinkbeg(x, i))
+@inline _shrinkbeg(x::StaticList, N::Int) = N === 1 ? x : _shrinkbeg(tail(x), N - 1)
+@generated function _shrinkbeg(x::StaticList, ::StaticInt{N}) where {N}
+    out = :x
+    for _ in 1:(N - 1)
+        out = :(tail($(out)))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
+end
+
 @inline Base.get(x::StaticList, i::Integer, d) = checkbounds(Bool, x, i) ? _getindex(x, i) : d
 
 function Base.setindex(x::StaticList, v, i::Integer)
     @boundscheck checkbounds(x, i)
     unsafe_setindex(x, v, i)
 end
-@inline unsafe_setindex(x::OneItem, v, i::Int) = cons(v, none)
-@inline function unsafe_setindex(x::TwoItems, v, i::Int)
-    i === 1 ? cons(v, tail(x)) : cons(first(x), v)
-end
+@inline unsafe_setindex(x::OneItem, v, i::Int) = list(v)
+@inline unsafe_setindex(x::TwoItems, v, i::Int) = i === 1 ? cons(v, tail(x)) : cons(first(x), v)
 @inline function unsafe_setindex(x::StaticList, v, i::Int)
     i === 1 ? cons(v, tail(x)) : cons(first(x), unsafe_setindex(tail(x), v, i - 1))
 end
-
+@generated function unsafe_setindex(x0::StaticList, v, ::StaticInt{N}) where {N}
+    out = ntails_expr(N)
+    r = :(cons(v, Base.tail($(Symbol(:x, N-1)))))
+    for i in (N - 2):-1:0
+        r = :(cons(first($(Symbol(:x, i))), $r))
+    end
+    push!(out.args, r)
+    return out
+end
 
 ###
 # Comparison
@@ -367,7 +235,7 @@ Base.isempty(x::NFirst) = iszero(slength(x))
 
 Base.empty(::ListType) = none
 
-slength(T::DataType) = T.parameters[3]()
+slength(T::Type{<:StaticList}) = T.parameters[3]()
 slength(x::RevList) = slength(parent(x))
 slength(x::Union{NFirst,StaticList}) = getfield(x, :length)
 @inline Base.length(x::ListType) = Int(slength(x))
@@ -381,16 +249,16 @@ Base.Iterators.reverse(x::Union{EmptyList,OneItem}) = x
 Base.Iterators.reverse(x::StaticList) = Base.Iterators.Reverse(x)
 Base.reverse(x::StaticList) = Base.Iterators.reverse(x)
 
-Base.tail(::EmptyList) = throw(ArgumentError("Cannot call Base.tail on an empty list"))
+@noinline Base.tail(::EmptyList) = throw(ArgumentError("Cannot call Base.tail on an empty list"))
 Base.tail(::OneItem) = none
-@inline Base.tail(x::StaticList) = getfield(x, :tail)
+@inline Base.tail(x::StaticList) = @inbounds getfield(x, :tail)
 
 Base.front(::EmptyList) = throw(ArgumentError("Cannot call Base.front on an empty list"))
 @inline Base.front(::OneItem) = none
 @inline Base.front(x::StaticList) = first(x, slength(x) - static(1))
 
-Base.first(::EmptyList) = throw(ArgumentError("Cannot call first on an empty list"))
-Base.first(x::StaticList) = getfield(x, :first)
+@noinline Base.first(::EmptyList) = throw(ArgumentError("Cannot call first on an empty list"))
+@inline Base.first(x::StaticList) = getfield(x, :first)
 @inline Base.first(x::RevList) = last(parent(x))
 Base.first(x::StaticList, i::Integer) = (@boundscheck checkbounds(x, i); NFirst(x, i))
 Base.first(x::NFirst, i::Integer) = (@boundscheck checkbounds(x, i); NFirst(parent(x), i))
@@ -403,14 +271,13 @@ Base.last(x::OneItem) = first(x)
 @inline Base.last(x::RevList) = first(parent(x))
 function Base.last(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
-    _shrinkbeg(x, (slength(x) + StaticInt(1)) - i)
+    _shrinkbeg(x, (slength(x) + ONE) - i)
 end
 
-Base.isdone(x::StaticList, s::StaticList) = isempty(s)
 Base.iterate(::EmptyList) = nothing
 Base.iterate(x::StaticList) = first(x), tail(x)
 Base.iterate(::OneItem, state) = nothing
-@inline Base.iterate(x::StaticList, s) = isdone(x, s) ? nothing : (first(s), tail(s))
+@inline Base.iterate(::StaticList, s) = s === none ? nothing : (first(s), tail(s))
 @inline function Base.iterate(x::NFirst, s=(parent(x), length(x)))
     len = getfield(s, 2)
     if len === 0
@@ -420,6 +287,25 @@ Base.iterate(::OneItem, state) = nothing
         return first(lst), (tail(lst), len - 1)
     end
 end
+Base.iterate(x::RevList) = @inbounds(x[ONE]), 2
+@inline Base.iterate(x::RevTwo, s::Int) = s === 2 ? last(x) : nothing
+@inline function Base.iterate(x::RevThree, s::Int)
+    if s === 2
+        return (@inbounds(x[TWO]), 3)
+    elseif s === 3
+        return (@inbounds(x[THREE]), 4)
+    else
+        return nothing
+    end
+end
+@inline function Base.iterate(x::RevFour, s::Int)
+    if s < 4
+        s === 2 ? (@inbounds(x[TWO]), 3) : (@inbounds(x[THREE]), 4)
+    else
+        s === 4 ? (@inbounds(x[FOUR]), 5) : nothing
+    end
+end
+Base.iterate(x::RevList, s::Int) = length(x) < s ? nothing : (@inbounds(x[s]), s + 1)
 
 Base.only(x::OneItem) = first(x)
 
@@ -436,18 +322,108 @@ Base.filter(f, ::EmptyList) = none
     end
 end
 
-Base.map(f, ::EmptyList) = none
-Base.map(f, x::OneItem) = list(f(first(x)))
-#@inline Base.map(f, x::TwoItems) = cons(f(first(x)), list(f(last(x))))
+Base.map(f, ::None) = none
 @inline Base.map(f, x::StaticList) = _genmap(f, x, slength(x))
+@generated function _genmap(f, x0::StaticList, ::StaticInt{N}) where {N}
+    blk = ntails_expr(N)
+    out = :none
+    for i in (N - 1):-1:0
+        out = :(cons(f(first($(Symbol(:x, i)))), $(out)))
+    end
+    push!(blk.args, out)
+    return blk
+end
+
 @inline Base.mapfoldl(f, op, x::StaticList; init=nil) = _mapfoldl(f, op, x, init, slength(x))
+@generated function _mapfoldl(f, op, x0::StaticList, init::I, ::StaticInt{N}) where {I,N}
+    out = ntails_expr(N)
+    if I <: Nil
+        e = :(f(first($(Symbol(:x, 0)))))
+        idx = 1
+    else
+        e = :init
+        idx = 0
+    end
+    for i in idx:(N - 1)
+        e = :(op($(e), f(first($(Symbol(:x, i))))))
+    end
+    push!(out.args, e)
+    return out
+end
+
+
 @inline Base.mapfoldr(f, op, x::StaticList; init=nil) = _mapfoldr(f, op, x, init, slength(x))
+@generated function _mapfoldr(f, op, x0::StaticList, init::I, ::StaticInt{N}) where {I,N}
+    out = ntails_expr(N)
+    if I <: Nil
+        e = :(f(first($(Symbol(:x, N - 1)))))
+        idx = N - 2
+    else
+        e = :init
+        idx = N - 1
+    end
+
+    for i in idx:-1:0
+        xsym = Symbol(:x, i)
+        e = :(op(f(first($xsym)), $(e)))
+    end
+    push!(out.args, e)
+    return out
+end
+
+"""
+    insert(list, index, item) -> out
+
+Returns a list where `item` is inserted at `index`. `index` is the index of item in `out`.
+"""
+@inline function insert(x::StaticList, i::Integer, v)
+    @boundscheck 1 <= i <= (length(x) + 1)
+    unsafe_insert(x, i, v)
+end
+@inline unsafe_insert(::EmptyList, ::Int, v) = list(v)
+@inline unsafe_insert(x::OneItem, i::Int, v) = i === 1 ? cons(v, x) : list(first(x), v)
+@inline function unsafe_insert(x::StaticList, i::Int, v)
+    i === 1 ? cons(v, x) : cons(first(x), unsafe_insert(tail(x), i - 1, v))
+end
+@generated function unsafe_insert(x0::StaticList, ::StaticInt{N}, v) where {N}
+    out = ntails_expr(N - 1)
+    r = :(cons(v, $(Symbol(:x, N-1))))
+    for i in (N - 2):-1:0
+        r = :(cons(first($(Symbol(:x, i))), $r))
+    end
+    push!(out.args, r)
+    return out
+end
+
+"""
+    deleteat(list, index)
+
+Returns a list without the value corresponding to `index`.
+"""
+function deleteat(x::StaticList, i::Integer)
+    @boundscheck checkbounds(x, i)
+    unsafe_deleteat(x, i)
+end
+unsafe_deleteat(x::OneItem, i::Int) = none
+@inline unsafe_deleteat(x::TwoItems, i::Int) = i === 1 ? tail(x) : list(first(x))
+@inline function unsafe_deleteat(x::StaticList, i::Int)
+    i === 1 ? tail(x) : cons(first(x), unsafe_deleteat(tail(x), i - 1))
+end
+@generated function unsafe_deleteat(x0::StaticList, ::StaticInt{N}) where {N}
+    out = ntails_expr(N)
+    r = :(Base.tail($(Symbol(:x, N-1))))
+    for i in (N - 2):-1:0
+        r = :(cons(first($(Symbol(:x, i))), $r))
+    end
+    push!(out.args, r)
+    return out
+end
 
 ###
 # show
 ###
 Base.show(io::IO, x::Union{StaticList,Nil,NFirst}) = show(io, MIME"text/plain"(), x)
-Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(out, "nil")
+Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(io, "nil")
 @noinline Base.show(io::IO, ::MIME"text/plain", x::NFirst) = print(io, "NFirst(" * strlist(x) * ")")
 @noinline Base.show(io::IO, ::MIME"text/plain", x::StaticList) = print(io, "list(" * strlist(x) * ")")
 @noinline function strlist(x)
@@ -464,10 +440,40 @@ Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(out, "nil")
     return str
 end
 
-@specialize
+"""
+    popat(list, index) -> (list[index], deleteat(list, index))
+
+Returns the value at `key` and the StaticList without the value.
+"""
+function popat(x::StaticList, i::Integer)
+    @boundscheck checkbounds(x, i)
+    unsafe_popat(x, i)
+end
+@inline unsafe_popat(x::OneItem, i::Int) = first(x), none
+@inline function unsafe_popat(x::TwoItems, i::Int)
+    i === 1 ? (first(x), tail(x)) : (last(x), list(first(x)))
+end
+@inline function unsafe_popat(x::StaticList, i::Int)
+    if i === 1
+        return first(x), tail(x)
+    else
+        f, t = unsafe_popat(tail(x), i - 1)
+        return f, cons(first(x), t)
+    end
+end
+@generated function unsafe_popat(x0::StaticList, ::StaticInt{N}) where {N}
+    out = ntails_expr(N)
+    r = :(Base.tail($(Symbol(:x, N-1))))
+    for i in (N - 2):-1:0
+        r = :(cons(first($(Symbol(:x, i))), $r))
+    end
+    push!(out.args, :(first($(Symbol(:x, N - 1))), $r))
+    return out
+end
+
 
 ## findfirst
-function Base.findfirst(f::Function, @nospecialize(lst::StaticList))
+function Base.findfirst(f::Function, lst::StaticList)
     n = find_first(f, lst)
     if n === 0
         return nothing
@@ -475,8 +481,8 @@ function Base.findfirst(f::Function, @nospecialize(lst::StaticList))
         return n
     end
 end
-@inline find_first(f, @nospecialize(lst::OneItem)) = f(first(lst)) ? 1 : 0
-@inline function find_first(f, @nospecialize(lst::StaticList))
+@inline find_first(f, lst::OneItem) = f(first(lst)) ? 1 : 0
+@inline function find_first(f, lst::StaticList)
     if f(first(lst))
         return 1
     else
@@ -489,6 +495,8 @@ end
     end
 end
 
+@specialize
+
 @inline function maybe_static_find_first(@nospecialize(f), @nospecialize(lst::StaticList))
     if isdefined(typeof(lst), :instance) && isdefined(typeof(f), :instance)
         return static_find_first(f, lst)
@@ -499,6 +507,20 @@ end
 
 @generated function static_find_first(::F, ::L) where {F,L}
     :($(StaticInt{find_first(F.instance, L.instance)}()))
+end
+
+@generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:StaticList})) where {N}
+    if N === 1
+        return :(T.parameters[1])
+    else
+        out = :(T.parameters[1])
+        t = :(T.parameters[2])
+        for _ in 1:(N-1)
+            out = Expr(:call, :typejoin, out, :($(t).parameters[1]))
+            t = :($(t).parameters[2])
+        end
+        return out
+    end
 end
 
 end
