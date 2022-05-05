@@ -53,7 +53,6 @@ const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
 
 const none = StaticList(nil, nil, StaticInt(0))
 
-Base.reverse(@nospecialize(x::StaticList)) = _reverse(x, slength(x))
 @generated function _reverse(@nospecialize(x0::StaticList), ::StaticInt{N}) where {N}
     blk = ntails_expr(N)
     out = :none
@@ -376,6 +375,10 @@ Base.haskey(x::ListType, key) = in(key, keys(x))
 @inline Base.keys(x::StaticList) = eachindex(x)
 Base.keys(x::KeyedStaticList) = getfield(x, :keys)
 
+
+Base.reverse(x::Union{EmptyList,OneItem}) = x
+Base.reverse(x::StaticList) = _reverse(x, slength(x))
+
 ###
 # Indexing
 ###
@@ -393,13 +396,19 @@ end
     unsafe_getindex(lst, i)
 end
 # TODO Base.getindex(lst::StaticList, i::AbstractUnitRange)
+unsafe_getindex(lst::OneItem, ::Int) = first(lst)
+@inline unsafe_getindex(lst::TwoItems, i::Int) = i === 1 ? first(lst) : last(lst)
 @inline function unsafe_getindex(lst::StaticList, i::Int)
     i === 1 ? first(lst) : unsafe_getindex(tail(lst), i - 1)
 end
 
-function Base.setindex(x::ListType, v, i::Integer)
+function Base.setindex(x::StaticInt, v, i::Integer)
     @boundscheck checkbounds(x, i)
     unsafe_setindex(x, v, i)
+end
+@inline unsafe_setindex(x::OneItem, v, i::Int) = cons(v, none)
+@inline function unsafe_setindex(x::TwoItems, v, i::Int)
+    i === 1 ? cons(v, tail(x)) : cons(first(x), v)
 end
 @inline function unsafe_setindex(x::StaticList, v, i::Int)
     i === 1 ? cons(v, tail(x)) : cons(first(x), unsafe_setindex(tail(x), v, i - 1))
@@ -424,6 +433,8 @@ function deleteat(lst::StaticList, i::Integer)
     @boundscheck checkbounds(lst, i)
     unsafe_deleteat(lst, i)
 end
+unsafe_deleteat(::OneItem, i::Int) = none
+@inline unsafe_deleteat(x::TwoItems, i::Int) = i === 1 ? tail(x) : cons(first(x), none)
 @inline function unsafe_deleteat(lst::StaticList, i::Int)
     if i === 1
         return tail(lst)
@@ -437,12 +448,10 @@ function deleteat(kl::KeyedStaticList, key)
     KeyedStaticList(unsafe_deleteat(keys(kl), i), unsafe_deleteat(values(kl), i))
 end
 
-
-pushfirst(x::StaticList, item) = cons(item, x)
+@inline pushfirst(x::StaticList, item) = cons(item, x)
 @inline function pushfirst(x::KeyedStaticList, kv::Pair)
     KeyedStaticList(pushfirst(keys(x), getfield(kv, 1)), pushfirst(values(x), getfield(kv, 2)))
 end
-
 
 @inline pop(x::StaticList) = popat(x, slength(x))
 @inline function pop(kl::KeyedStaticList)
@@ -461,6 +470,14 @@ end
 function popat(lst::StaticList, i::Integer)
     @boundscheck checkbounds(lst, i)
     unsafe_popat(lst, i)
+end
+@inline unsafe_popat(x::OneItem, i::Int) = first(x), none
+@inline function unsafe_popat(x::TwoItems, i::Int)
+    if i === 1
+        return first(x), tail(x)
+    else
+        return last(x), cons(first(x), none)
+    end
 end
 @inline function unsafe_popat(x::StaticList, i::Int)
     if i === 1
