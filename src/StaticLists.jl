@@ -1,7 +1,6 @@
 module StaticLists
 
-using Base: front, tail
-using Base.Iterators: take
+using Base: front, tail, @propagate_inbounds
 using Static
 
 export cons, deleteat, list, insert
@@ -81,7 +80,6 @@ function ntails_expr(N::Int)
     end
     out
 end
-
 
 Base.parent(x::StaticList) = x
 Base.parent(x::Union{NFirst,RevList}) = getfield(x, 1)
@@ -239,6 +237,7 @@ slength(T::Type{<:StaticList}) = T.parameters[3]()
 slength(x::RevList) = slength(parent(x))
 slength(x::Union{NFirst,StaticList}) = getfield(x, :length)
 @inline Base.length(x::ListType) = Int(slength(x))
+Base.size(x::ListType) = (length(x),)
 
 ###
 # Iterators
@@ -262,6 +261,7 @@ Base.front(::EmptyList) = throw(ArgumentError("Cannot call Base.front on an empt
 @inline Base.first(x::RevList) = last(parent(x))
 Base.first(x::StaticList, i::Integer) = (@boundscheck checkbounds(x, i); NFirst(x, i))
 Base.first(x::NFirst, i::Integer) = (@boundscheck checkbounds(x, i); NFirst(parent(x), i))
+@propagate_inbounds Base.first(x::RevList, i::Integer) = reverse(last(parent(x), i))
 Base.Iterators.take(x::ListType, i::Integer) = @inbounds first(x, min(i, slength(x)))
 
 Base.last(::EmptyList) = throw(ArgumentError("Cannot call last on an empty list"))
@@ -269,10 +269,16 @@ Base.last(x::OneItem) = first(x)
 @inline Base.last(x::TwoItems) = first(tail(x))
 @inline Base.last(x::StaticList) = @inbounds x[slength(x)]
 @inline Base.last(x::RevList) = first(parent(x))
+@propagate_inbounds Base.last(x::RevList, i::Integer) = reverse(first(parent(x), i))
+function Base.last(x::NFirst, i::Integer)
+    @boundscheck checkbounds(x, i)
+    return NFirst(@inbounds(last(parent(x), i)), slength(x))
+end
 function Base.last(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
     _shrinkbeg(x, (slength(x) + ONE) - i)
 end
+Base.Iterators.drop(x::ListType, i::Integer) = @inbounds last(x, min(i, slength(x)))
 
 Base.iterate(::EmptyList) = nothing
 Base.iterate(x::StaticList) = first(x), tail(x)
@@ -308,6 +314,11 @@ end
 Base.iterate(x::RevList, s::Int) = length(x) < s ? nothing : (@inbounds(x[s]), s + 1)
 
 Base.only(x::OneItem) = first(x)
+Base.only(x::RevList) = only(parent(x))
+Base.only(x::NFirst) = length(x) === 1 ? first(x) : _list_only_error()
+Base.only(::ListType) = _list_only_error()
+@noinline Base.only(::None) = throw(ArgumentError("list is empty, must contain exactly 1 element"))
+@noinline _list_only_error() = throw(ArgumentError("list has multiple elements, must contain exactly 1 element"))
 
 ###
 # Mapping/Reducing
