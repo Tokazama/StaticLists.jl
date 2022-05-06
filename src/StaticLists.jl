@@ -3,22 +3,7 @@ module StaticLists
 using Base: front, tail, @propagate_inbounds
 using Static
 
-export cons, deleteat, list, insert
-
-@static if isdefined(Base, Symbol("@assume_effects"))
-    using Base: @assume_effects
-else
-    macro assume_effects(_, ex)
-        Base.@pure ex
-    end
-end
-
-@assume_effects :total function _known_instance(T::DataType)
-    isdefined(T, :instance) ? getfield(T, :instance) : nothing
-end
-@inline known_instance(T::DataType) = _known_instance(T)
-@inline known_instance(@nospecialize(x)) = _known_instance(typeof(x))
-
+export cons, deleteat, insert, list
 
 const ONE = static(1)
 const TWO = static(2)
@@ -29,29 +14,30 @@ struct Nil end
 
 const nil = Nil()
 
+@nospecialize
+
 """
     StaticList(first, tail)
 
 A statically-sized, singly-linked StaticList.
 """
-struct StaticList{F,T,L}
+struct StaticList{F,T}
     first::F
     tail::T
-    length::L
 end
 
-const None = StaticList{Nil,Nil,StaticInt{0}}
-const none = StaticList(nil, nil, StaticInt(0))
+const None = StaticList{Nil,Nil}
+const none = StaticList(nil, nil)
 
-const OneItem{T} = StaticList{T,Nil,StaticInt{1}}
-const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
-const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3},StaticInt{3}}
-const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
+const OneItem{T} = StaticList{T,Nil}
+const TwoItems{T1,T2} = StaticList{T1,OneItem{T2}}
+const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3}}
+const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4}}
 
-const RevList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
-const RevTwo{T1,T2} = RevList{T2,OneItem{T1},StaticInt{2}}
-const RevThree{T1,T2,T3} = RevList{T3,TwoItems{T2,T1},StaticInt{3}}
-const RevFour{T1,T2,T3,T4} = RevList{T4,ThreeItems{T3,T2,T1},StaticInt{4}}
+const RevList{F,T,L} = Iterators.Reverse{StaticList{F,T}}
+const RevTwo{T1,T2} = RevList{T2,OneItem{T1}}
+const RevThree{T1,T2,T3} = RevList{T3,TwoItems{T2,T1}}
+const RevFour{T1,T2,T3,T4} = RevList{T4,ThreeItems{T3,T2,T1}}
 
 const EmptyList = Union{None,RevList{None}}
 
@@ -61,8 +47,6 @@ struct NFirst{P,L}
 end
 
 const ListType = Union{NFirst,StaticList,RevList}
-
-@nospecialize
 
 # decomposes into a block of symbols up to the `N`th position
 # ntails_expr(3) ->
@@ -91,15 +75,15 @@ Composes a list where each argument is a member of the list.
 """
 list() = none
 # this is a trick to speed up compilation of the first item
-@generated list(x) = :(StaticList(x, $nil, $ONE))
+list(x) = StaticList(x, nil)
 @inline list(@nospecialize(x), @nospecialize(args...)) = cons(x, list(args...))
 
 @inline cons(x, y) = cons(x, list(y))
 @inline cons(x, ::None) = list(x)
-@generated cons(x, y::OneItem) = :(StaticList(x, y, $TWO))
-@generated cons(x, y::TwoItems) = :(StaticList(x, y, $THREE))
-@generated cons(x, y::ThreeItems) = :(StaticList(x, y, $FOUR))
-@inline cons(x, y::StaticList) = StaticList(x, y, ONE + slength(y))
+@generated cons(x, y::OneItem) = :(StaticList(x, y))
+@generated cons(x, y::TwoItems) = :(StaticList(x, y))
+@generated cons(x, y::ThreeItems) = :(StaticList(x, y))
+@inline cons(x, y::StaticList) = StaticList(x, y)
 @inline cons(x::StaticList, y) = unsafe_insert(x, slength(x) + ONE, y)
 #@inline cons(x::StaticList, y::StaticList) = cat(x, y)
 
@@ -109,7 +93,12 @@ Base.eltype(x::ListType) = eltype(typeof(x))
 Base.eltype(T::Type{<:NFirst}) = eltype(T.parameters[1])
 Base.eltype(::Type{<:EmptyList}) = Union{}
 Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
-Base.eltype(T::Type{<:StaticList}) = _eltype(slength(T), T)
+@inline function Base.eltype(T::Type{<:TwoItems})
+    typejoin(T.parameters[1], T.parameters[2].parameters[1])
+end
+@inline function Base.eltype(T::Type{<:StaticList})
+    typejoin(T.parameters[1], eltype(T.parameters[2]))
+end
 
 ###
 # Indexing
@@ -160,13 +149,7 @@ end
 @inline _getindex(x::OneItem, ::Int) = first(x)
 @inline _getindex(x::TwoItems, i::Int) = i === 1 ? first(x) : last(x)
 @inline function _getindex(x::ThreeItems, i::Int)
-    if i === 1
-        return first(x)
-    elseif i === 2
-        return @inbounds x[TWO]
-    else
-        return @inbounds x[THREE]
-    end
+    i === 1 ? first(x) : (i === 2 ? @inbounds(x[TWO]) : @inbounds(x[THREE]))
 end
 @inline _getindex(x::StaticList, i::Int) = i === 1 ? first(x) : _getindex(tail(x), i - 1)
 @inline _getindex(x::StaticList, i::StaticInt) = first(_shrinkbeg(x, i))
@@ -233,10 +216,17 @@ Base.isempty(x::NFirst) = iszero(slength(x))
 
 Base.empty(::ListType) = none
 
-slength(T::Type{<:StaticList}) = T.parameters[3]()
 slength(x::RevList) = slength(parent(x))
-slength(x::Union{NFirst,StaticList}) = getfield(x, :length)
-@inline Base.length(x::ListType) = Int(slength(x))
+slength(x::NFirst) = getfield(x, :length)
+slength(x::StaticList) = StaticInt(length(x))
+Base.length(::None) = 0
+Base.length(::OneItem) = 1
+Base.length(::TwoItems) = 2
+Base.length(::ThreeItems) = 3
+Base.length(::FourItems) = 4
+@inline Base.length(x::StaticList) = length(tail(x)) + 1
+@inline Base.length(x::RevList) = length(parent(x))
+@inline Base.length(x::NFirst) = Int(slength(x))
 Base.size(x::ListType) = (length(x),)
 
 ###
@@ -293,22 +283,16 @@ Base.iterate(::OneItem, state) = nothing
         return first(lst), (tail(lst), len - 1)
     end
 end
-Base.iterate(x::RevList) = @inbounds(x[ONE]), 2
-@inline Base.iterate(x::RevTwo, s::Int) = s === 2 ? last(x) : nothing
+Base.iterate(x::RevList) = _getindex(parent(x), slength(x)), 2
+@inline Base.iterate(x::RevTwo, s::Int) = s === 2 ? last(parent(x)) : nothing
 @inline function Base.iterate(x::RevThree, s::Int)
-    if s === 2
-        return (@inbounds(x[TWO]), 3)
-    elseif s === 3
-        return (@inbounds(x[THREE]), 4)
-    else
-        return nothing
-    end
+    @inbounds s === 2 ? (parent(x)[TWO], 3) : (s === 3 ? (first(parent(x)), 4) : nothing)
 end
 @inline function Base.iterate(x::RevFour, s::Int)
     if s < 4
-        s === 2 ? (@inbounds(x[TWO]), 3) : (@inbounds(x[THREE]), 4)
+        s === 2 ? (@inbounds(parent(x)[THREE]), 3) : (@inbounds(parent(x)[TWO]), 4)
     else
-        s === 4 ? (@inbounds(x[FOUR]), 5) : nothing
+        s === 4 ? (first(parent(x)), 5) : nothing
     end
 end
 Base.iterate(x::RevList, s::Int) = length(x) < s ? nothing : (@inbounds(x[s]), s + 1)
@@ -482,56 +466,23 @@ end
     return out
 end
 
-
 ## findfirst
-function Base.findfirst(f::Function, lst::StaticList)
-    n = find_first(f, lst)
-    if n === 0
+@inline function Base.findfirst(f::Function, lst::StaticList)
+    index = _findfirst(f, lst, slength(lst))
+    if index === 0
         return nothing
     else
-        return n
+        return index
     end
 end
-@inline find_first(f, lst::OneItem) = f(first(lst)) ? 1 : 0
-@inline function find_first(f, lst::StaticList)
-    if f(first(lst))
-        return 1
-    else
-        n = find_first(f, tail(lst))
-        if n === 0
-            return 0
-        else
-            return n + 1
-        end
+@generated function _findfirst(f, x1::StaticList, ::StaticInt{N}) where {N}
+    out = :0
+    for i in N:-1:2
+        out = Expr(:block, :($(Symbol(:x, i)) = tail($(Symbol(:x, i - 1)))), Expr(:if, :(f(first($(Symbol(:x, i))))), i, out))
     end
+    Expr(:block, Expr(:meta, :inline), Expr(:if, :(f(first(x1))), 1, out))
 end
 
 @specialize
-
-@inline function maybe_static_find_first(@nospecialize(f), @nospecialize(lst::StaticList))
-    if isdefined(typeof(lst), :instance) && isdefined(typeof(f), :instance)
-        return static_find_first(f, lst)
-    else
-        return find_first(f, lst)
-    end
-end
-
-@generated function static_find_first(::F, ::L) where {F,L}
-    :($(StaticInt{find_first(F.instance, L.instance)}()))
-end
-
-@generated function _eltype(::StaticInt{N}, @nospecialize(T::Type{<:StaticList})) where {N}
-    if N === 1
-        return :(T.parameters[1])
-    else
-        out = :(T.parameters[1])
-        t = :(T.parameters[2])
-        for _ in 1:(N-1)
-            out = Expr(:call, :typejoin, out, :($(t).parameters[1]))
-            t = :($(t).parameters[2])
-        end
-        return out
-    end
-end
 
 end
