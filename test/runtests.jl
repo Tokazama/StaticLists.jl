@@ -1,6 +1,6 @@
 using Base: front, tail
 using StaticLists
-using StaticLists: popat, deleteat
+using StaticLists: popat, to_stacked_index, StackedIndex
 using Static
 using Test
 
@@ -35,7 +35,7 @@ lst = list(1, 2, 3, 4)
 @test @inferred(in(5, lst)) === false
 @test @inferred(Base.setindex(lst, 6, 3)) == list(1, 2, 6, 4)
 @test @inferred(Base.setindex(lst, 6, static(3))) == list(1, 2, 6, 4)
-@test @inferred(cons(lst, 5)) == list(1, 2, 3, 4, 5)
+@test @inferred(insert(lst, 5, 5)) == list(1, 2, 3, 4, 5)
 @test @inferred(deleteat(lst, 3)) == list(1, 2, 4)
 @test @inferred(deleteat(lst, static(3))) == list(1, 2, 4)
 @test @inferred(popat(lst, 3)) == (3, list(1, 2, 4))
@@ -64,4 +64,28 @@ elst = empty(lst)
 @test_throws ArgumentError last(elst)
 @test_throws ArgumentError tail(elst)
 @test_throws ArgumentError front(elst)
+
+# stacked indexing
+lens = accumulate(+, list(static(2), static(3), static(4), static(1)))
+
+@test @inferred(to_stacked_index(lens, 1)) === StackedIndex(1, 1)
+@test @inferred(to_stacked_index(lens, 2)) === StackedIndex(1, 2)
+@test @inferred(to_stacked_index(lens, 3)) === StackedIndex(2, 1)
+@test @inferred(to_stacked_index(lens, 4)) === StackedIndex(2, 2)
+@test @inferred(to_stacked_index(lens, 5)) === StackedIndex(2, 3)
+@test @inferred(to_stacked_index(lens, 6)) === StackedIndex(3, 1)
+@test @inferred(to_stacked_index(lens, 7)) === StackedIndex(3, 2)
+@test @inferred(to_stacked_index(lens, 8)) === StackedIndex(3, 3)
+@test @inferred(to_stacked_index(lens, 9)) === StackedIndex(3, 4)
+@test @inferred(to_stacked_index(lens, 10)) === StackedIndex(4, 1)
+@test @inferred(to_stacked_index(lens, static(1))) === StackedIndex(static(1), static(1))
+@test @inferred(to_stacked_index(lens, static(2))) === StackedIndex(static(1), static(2))
+@test @inferred(to_stacked_index(lens, static(3))) === StackedIndex(static(2), static(1))
+@test @inferred(to_stacked_index(lens, static(4))) === StackedIndex(static(2), static(2))
+@test @inferred(to_stacked_index(lens, static(5))) === StackedIndex(static(2), static(3))
+@test @inferred(to_stacked_index(lens, static(6))) === StackedIndex(static(3), static(1))
+@test @inferred(to_stacked_index(lens, static(7))) === StackedIndex(static(3), static(2))
+@test @inferred(to_stacked_index(lens, static(8))) === StackedIndex(static(3), static(3))
+@test @inferred(to_stacked_index(lens, static(9))) === StackedIndex(static(3), static(4))
+@test @inferred(to_stacked_index(lens, static(10))) === StackedIndex(static(4), static(1))
 
