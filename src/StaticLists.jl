@@ -1,162 +1,144 @@
 module StaticLists
 
-using Base: front, tail, @propagate_inbounds, setindex
+using Base: @propagate_inbounds, tail, setindex
 using Static
 
-export cons, deleteat, insert, list
+export deleteat, insert, list, popat
 
-const ZERO = static(0)
-const ONE = static(1)
-const TWO = static(2)
-const THREE = static(3)
-const FOUR = static(4)
+const ONE = StaticInt(1)
+
+@nospecialize
+
+const INIT = Base._InitialValue()
 
 struct Nil end
 
 const nil = Nil()
 
-@nospecialize
+@noinline Base.first(::Nil) = throw(ArgumentError("Cannot call first on an empty list"))
+@noinline Base.last(::Nil) = throw(ArgumentError("Cannot call last on an empty list"))
+@noinline Base.tail(::Nil) = throw(ArgumentError("Cannot call Base.tail on an empty list"))
 
-"""
-    StaticList(first, tail)
+function ntails_expr(s::Union{Symbol,Expr}, N::Int)
+    out = s
+    for _ in 1:N
+        out = :(getfield($(out), 2))
+    end
+    ifelse(N === 0, out, :(@inbounds($(out))))
+end
+_getexpr(s::Union{Symbol,Expr}, N::Int) = Expr(:call, :getfield, ntails_expr(s, N - 1), 1)
 
-A statically-sized, singly-linked StaticList.
-"""
 struct StaticList{F,T,L}
     first::F
     tail::T
     length::L
 end
 
-const None = StaticList{Nil,Nil,StaticInt{0}}
-const none = StaticList(nil, nil, ZERO)
-
 const OneItem{T} = StaticList{T,Nil,StaticInt{1}}
 const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
-const ThreeItems{T1,T2,T3} = StaticList{T1,TwoItems{T2,T3},StaticInt{3}}
-const FourItems{T1,T2,T3,T4} = StaticList{T1,ThreeItems{T2,T3,T4},StaticInt{4}}
+const ReverseList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
+const ReverseOne{T} = ReverseList{T,Nil,StaticInt{1}}
 
-const RevList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
-const RevTwo{T1,T2} = RevList{T2,OneItem{T1},StaticInt{2}}
-const RevThree{T1,T2,T3} = RevList{T3,TwoItems{T2,T1},StaticInt{3}}
-const RevFour{T1,T2,T3,T4} = RevList{T4,ThreeItems{T3,T2,T1},StaticInt{4}}
+@inline Base.first(x::StaticList) = getfield(x, :first)
 
-const EmptyList = Union{None,RevList{None}}
+@inline Base.tail(x::StaticList) = @inbounds getfield(x, :tail)
 
-struct NFirst{P,L}
-    parent::P
-    length::L
-end
+@inline Base.last(x::StaticList) = @inbounds(x[slength(x)])
 
-struct StackedList{C,L}
-    children::C
-    lengths::L  # accumulating length of each child
-end
-StackedList(x::Union{TwoItems,ThreeItems,FourItems}) = StackedList(x, sumlengths(x))
-@inline sumlengths(x::StaticList) = _sumlengths(slength(first(x)), tail(x))
-@inline _sumlengths(prev, x) = cons(prev, _sumlengths(prev + slength(first(x)), tail(x)))
-_sumlengths(prev, ::None) = list(prev)
-
-const TwoLists{C1,C2,L1,L2} = StackedList{TwoItems{C1,C2},TwoItems{L1,L2}}
-const ThreeLists{C1,C2,C3,L1,L2,L3} = StackedList{ThreeItems{C1,C2,C3},ThreeItems{L1,L2,L3}}
-const FourLists{C1,C2,C3,C4,L1,L2,L3,L4} = StackedList{FourItems{C1,C2,C3,C4},FourItems{L1,L2,L3,L4}}
-
-children(x::StackedList) = getfield(x, 1)
-
-@inline nchildren(x::StackedList) = slength(chidlren(x))
-
-lengths(x::StackedList) = getfield(x, :lengths)
-
-const ListType = Union{NFirst,StaticList,RevList,StackedList}
-
-# decomposes into a block of symbols up to the `N`th position
-# ntails_expr(3) ->
-# quote
-#    x1 = Base.tail(x0)
-#    x2 = Base.tail(x1)
-#    x3 = Base.tail(x2)
-# end
-function ntails_expr(N::Int)
-    out = Expr(:block, Expr(:meta, :inline))
-    psym = :x0
-    for i in 1:N
-        push!(out.args, Expr(:(=), Symbol(:x, i), :(Base.tail($psym))))
-        psym = Symbol(:x, i)
+Base.reverse(x::StaticList) = _reverse(x, slength(x))
+Base.collect(x::StaticList) = x
+Base.collect(x::ReverseList) = _reverse(getfield(x, 1), slength(x))
+@generated function _reverse(x::StaticList, ::StaticInt{N}) where {N}
+    out = Expr(:tuple)
+    for i in N:-1:1
+        push!(out.args, :(_getindex(x, $(StaticInt(i)))))
     end
-    out
+    Expr(:block, Expr(:meta, :inline), :(_list($(out), $(static(N)))))
 end
 
-Base.parent(x::StaticList) = x
-Base.parent(x::Union{NFirst,RevList}) = getfield(x, 1)
+@inline Base.eachindex(x::StaticList) = Base.OneTo(length(x))
+
+Base.IteratorSize(T::Type{<:StaticList}) = Base.HasLength()
+
+Base.only(x::OneItem) = first(x)
+@noinline Base.only(x::StaticList) = throw(ArgumentError("list has multiple elements, must contain exactly 1 element"))
+@noinline Base.only(::Nil) = throw(ArgumentError("list is empty, must contain exactly 1 element"))
+
+Base.checkbounds(x::Union{StaticList,ReverseList}, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
+Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i::Integer) = 1 <= i <= slength(x)
+Base.checkbounds(::Type{Bool}, x::StaticList, i::AbstractUnitRange) = 1 <= first(i) && last(i) <= slength(x)
+
+
+function Base.get(x::Union{StaticList,ReverseList}, i::Integer, d)
+    checkbounds(Bool, x, i) ? @inbounds(x[i]) : d
+end
+Base.getindex(x::StaticList, ::Colon) = x
+function Base.getindex(x::StaticList, i::Integer)
+    @boundscheck checkbounds(x, i)
+    _getindex(x, i)
+end
+@inline _getindex(x::StaticList, i::Int) = i === 1 ? first(x) : _getindex(tail(x), i - 1)
+@generated function _getindex(x::StaticList, ::StaticInt{N}) where {N}
+    Expr(:block, Expr(:meta, :inline), _getexpr(:x, N))
+end
+function Base.getindex(x::ReverseList, i::Integer)
+    @boundscheck checkbounds(x, i)
+    _getindex(getfield(x, 1), (slength(x) + ONE) - i)
+end
+
+function Base.setindex(x::StaticList, v, i::Integer)
+    @boundscheck checkbounds(x, i)
+    return _setindex(x, v, i)
+end
+@inline function _setindex(x::StaticList, v, i::Int)
+    if i === 1
+        return StaticList(v, tail(x), slength(x))
+    else
+        return StaticList(first(x), _setindex(tail(x), v, i - 1), slength(x))
+    end
+end
+_setindex(x::StaticList, v, i::StaticInt) = __setindex(x, v, i, slength(x))
+@generated function __setindex(x::StaticList, v, ::StaticInt{N}, ::StaticInt{L}) where {N,L}
+    out = :(StaticList(v, $(ntails_expr(:x, N)), $(StaticInt(L - N + 1))))
+    for i in (N-1):-1:1
+        out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i + 1))))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
+end
 
 """
     list(args...)
 
 Composes a list where each argument is a member of the list.
 """
-list() = none
-# this is a trick to speed up compilation of the first item
-list(x) = StaticList(x, nil, ONE)
-@inline list(@nospecialize(x), @nospecialize(args...)) = cons(x, list(args...))
+list(args...) = _list(args, StaticInt(nfields(args)))
+@generated function _list(args::Tuple, ::StaticInt{N}) where {N}
+    out = :nil
+    itr = 0
+    for i in N:-1:1
+        itr += 1
+        out = :(StaticList(getfield(args, $(i)), $(out), $(static(itr))))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
+end
 
-@inline cons(x, y) = cons(x, list(y))
-@inline cons(x, ::None) = list(x)
-@generated cons(x, y::OneItem) = :(StaticList(x, y, $(TWO)))
-@generated cons(x, y::TwoItems) = :(StaticList(x, y, $(THREE)))
-@generated cons(x, y::ThreeItems) = :(StaticList(x, y, $(FOUR)))
-@inline cons(x, y::StaticList) = StaticList(x, y, slength(y) + ONE)
+Base.values(x::StaticList) = x
 
-Base.values(x::Union{NFirst,StaticList,RevList}) = x
-
-Base.eltype(x::ListType) = eltype(typeof(x))
-Base.eltype(T::Type{<:NFirst}) = eltype(T.parameters[1])
-Base.eltype(T::Type{<:StackedList}) = eltype(T.parameters[1])
-Base.eltype(::Type{<:EmptyList}) = Union{}
+Base.eltype(x::StaticList) = eltype(typeof(x))
+Base.eltype(::Type{Nil}) = Union{}
 Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
-@inline function Base.eltype(T::Type{<:TwoItems})
-    typejoin(T.parameters[1], T.parameters[2].parameters[1])
-end
+Base.eltype(T::Type{<:TwoItems}) = typejoin(T.parameters[1], eltype(T.parameters[2]))
 @inline function Base.eltype(T::Type{<:StaticList})
-    typejoin(T.parameters[1], eltype(T.parameters[2]))
+    t = T.parameters[2]
+    typejoin(typejoin(T.parameters[1], t.parameters[1]), eltype(t.parameters[2]))
 end
-
-###
-# Indexing
-###
-Base.collect(x::RevList) = _reverse(x, slength(x))
-@generated function _reverse(x0::StaticList, ::StaticInt{N}) where {N}
-    blk = ntails_expr(N)
-    out = :none
-    for i in 0:(N - 1)
-        out = :(cons(first($(Symbol(:x, i))), $(out)))
-    end
-    push!(blk.args, out)
-    return blk
-end
-Base.collect(x::StaticList) = x
-# takes the first `N` values and attaches them to the new root/tail
-Base.collect(x::NFirst) = _reroot(parent(x), nil, slength(x))
-@generated function _reroot(x0::StaticList, root::StaticList, ::StaticInt{N}) where {N}
-    blk = ntails_expr(N)
-    out = :root
-    for i in (N - 1):-1:0
-        out = :(cons(first($(Symbol(:x, i))), $(out)))
-    end
-    push!(blk.args, out)
-    return blk
-end
-@inline function _reroot(x0::StaticList, root::StaticList, N::Int)
-    N === 1 ? cons(first(x0), root) : cons(first(x0), _reroot(tail(x), root, N - 1))
-end
-
-include("indexing.jl")
 
 ###
 # Comparison
 ###
-Base.:(==)(::EmptyList, ::EmptyList) = true
-function Base.:(==)(x::ListType, y::ListType)
-    if length(x) === length(y)
+Base.:(==)(::Nil, ::Nil) = true
+function Base.:(==)(x::StaticList, y::StaticList)
+    if slength(x) === slength(y)
         itrx = iterate(x)
         itry = iterate(y)
         while itrx !== nothing
@@ -170,100 +152,84 @@ function Base.:(==)(x::ListType, y::ListType)
     end
 end
 
-Base.in(x, lst::RevList) = in(x, parent(lst))
-@inline function Base.in(x, lst::Union{NFirst,StaticList})
-    for i in lst
-        i == x && return true
-    end
-    return false
-end
+Base.in(val, x::StaticList) = _findfirst(==(val), x, slength(x)) !== 0
 
-Base.isempty(::EmptyList) = true
-Base.isempty(::Union{StaticList,RevList}) = false
-Base.isempty(x::NFirst) = iszero(slength(x))
+Base.isempty(::Nil) = true
+Base.isempty(::StaticList) = false
 
-Base.empty(::ListType) = none
+Base.empty(::StaticList) = nil
 
-slength(x::RevList) = slength(parent(x))
-slength(x::Union{StaticList,NFirst}) = getfield(x, :length)
-@inline slength(x::StackedList) = last(lengths(x))
-Base.length(::None) = 0
-Base.length(::OneItem) = 1
-Base.length(::TwoItems) = 2
-Base.length(::ThreeItems) = 3
-Base.length(::FourItems) = 4
-@inline Base.length(x::StaticList) = Int(slength(x))
-@inline Base.length(x::Union{NFirst,RevList,StackedList}) = Int(slength(x))
-Base.size(x::ListType) = (length(x),)
+slength(::Nil) = StaticInt(0)
+slength(x::StaticList) = getfield(x, :length)
+slength(x::ReverseList) = slength(getfield(x, 1))
+@inline Base.length(x::Union{StaticList,Nil,ReverseList}) = Int(slength(x))
+Base.size(x::Union{StaticList,Nil}) = (length(x),)
 
-include("iterators.jl")
-
-###
-# Mapping/Reducing
-###
-Base.filter(f, ::EmptyList) = none
-@inline function Base.filter(f, lst::StaticList)
-    fst = first(lst)
-    if f(fst)
-        return cons(fst, filter(f, tail(lst)))
+Base.iterate(::Union{Nil,Iterators.Reverse{Nil}}) = nothing
+Base.iterate(x::Union{StaticList,ReverseList}) = first(x), 2
+Base.iterate(::Union{OneItem,ReverseOne}, ::Int) = nothing
+@inline Base.iterate(x::TwoItems, s::Int) = s === 2 ? (first(tail(x)), 3) : nothing
+@inline function Base.iterate(x::Union{StaticList,ReverseList}, s::Int)
+    if s > length(x)
+        return nothing
     else
-        return filter(f, tail(lst))
+        return @inbounds(x[s]), s + 1
     end
 end
 
-Base.map(f, ::None) = none
+Base.map(f, ::Nil) = nil
 @inline Base.map(f, x::StaticList) = _genmap(f, x, slength(x))
-@generated function _genmap(f, x0::StaticList, ::StaticInt{N}) where {N}
-    blk = ntails_expr(N)
-    out = :none
-    for i in (N - 1):-1:0
-        out = :(cons(f(first($(Symbol(:x, i)))), $(out)))
+@generated function _genmap(f, x::StaticList, ::StaticInt{N}) where {N}
+    out = :nil
+    cnt = 1
+    for i in N:-1:1
+        out = :(StaticList(f($(_getexpr(:x, i))), $(out), $(StaticInt(cnt))))
+        cnt += 1
     end
-    push!(blk.args, out)
-    return blk
+    Expr(:block,  Expr(:meta, :inline), out)
 end
 
-@inline Base.mapfoldl(f, op, x::StaticList; init=nil) = _mapfoldl(f, op, x, init, slength(x))
-@generated function _mapfoldl(f, op, x0::StaticList, init::I, ::StaticInt{N}) where {I,N}
-    out = ntails_expr(N)
-    if I <: Nil
-        e = :(f(first($(Symbol(:x, 0)))))
+_is_init(::Base._InitialValue) = True()
+_is_init(x) = False()
+
+# TODO errors on Nil
+@inline Base.mapfoldl(f, op, x::StaticList; init=INIT) = _mapfoldl(f, op, x, init, _is_init(init), slength(x))
+@generated function _mapfoldl(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
+    if IsInit <: True
+        out = :(f(first(x)))
+        idx = 2
+    else
+        out = :init
         idx = 1
-    else
-        e = :init
-        idx = 0
     end
-    for i in idx:(N - 1)
-        e = :(op($(e), f(first($(Symbol(:x, i))))))
+    for i in idx:N
+        out = :(op($(out), f($(_getexpr(:x, i)))))
     end
-    push!(out.args, e)
-    return out
+    Expr(:block, Expr(:meta, :inline), out)
 end
 
-@inline Base.mapfoldr(f, op, x::StaticList; init=nil) = _mapfoldr(f, op, x, init, slength(x))
-@generated function _mapfoldr(f, op, x0::StaticList, init::I, ::StaticInt{N}) where {I,N}
-    out = ntails_expr(N)
-    if I <: Nil
-        e = :(f(first($(Symbol(:x, N - 1)))))
-        idx = N - 2
-    else
-        e = :init
+@inline Base.mapfoldr(f, op, x::StaticList; init=INIT) = _mapfoldr(f, op, x, init, _is_init(init), slength(x))
+@generated function _mapfoldr(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
+    if IsInit <: True
+        out = :(f($(_getexpr(:x, N))))
         idx = N - 1
+    else
+        out = :init
+        idx = N
     end
-
-    for i in idx:-1:0
-        xsym = Symbol(:x, i)
-        e = :(op(f(first($xsym)), $(e)))
+    for i in idx:-1:1
+        out = :(op(f($(_getexpr(:x, i))), $(out)))
     end
-    push!(out.args, e)
-    return out
+    Expr(:block, Expr(:meta, :inline), out)
 end
 
 @inline function Base.accumulate(op, lst::StaticList; init=nil)
     init === nil ? _accum(op, first(lst), tail(lst)) : _accum(op, init, lst)
 end
-_accum(op, prev, ::None) = list(prev)
-@inline _accum(op, prev, lst::StaticList) = cons(prev, _accum(op, op(prev, first(lst)), tail(lst)))
+_accum(op, prev, ::Nil) = list(prev)
+@inline function _accum(op, prev, x::StaticList)
+    StaticList(prev, _accum(op, op(prev, first(x)), tail(x)), slength(x))
+end
 
 """
     insert(list, index, item) -> out
@@ -274,19 +240,22 @@ Returns a list where `item` is inserted at `index`. `index` is the index of item
     @boundscheck 1 <= i <= (length(x) + 1)
     unsafe_insert(x, i, v)
 end
-@inline unsafe_insert(::EmptyList, ::Int, v) = list(v)
-@inline unsafe_insert(x::OneItem, i::Int, v) = i === 1 ? cons(v, x) : list(first(x), v)
+@inline unsafe_insert(::Nil, ::Int, v) = StaticList(v, nil, ONE)
 @inline function unsafe_insert(x::StaticList, i::Int, v)
-    i === 1 ? cons(v, x) : cons(first(x), unsafe_insert(tail(x), i - 1, v))
-end
-@generated function unsafe_insert(x0::StaticList, ::StaticInt{N}, v) where {N}
-    out = ntails_expr(N - 1)
-    r = :(cons(v, $(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
+    if i === 1
+        return StaticList(v, x, slength(x) + ONE)
+    else
+        return StaticList(first(x), unsafe_insert(tail(x), i - 1, v), slength(x) + ONE)
     end
-    push!(out.args, r)
-    return out
+end
+unsafe_insert(x::StaticList, i::StaticInt, v) = _insert(x, i, slength(x), v)
+@generated function _insert(x::StaticList, ::StaticInt{N}, ::StaticInt{L}, v) where {N,L}
+    out = :(StaticList(v, $(ntails_expr(:x, N - 1)), $(StaticInt(L - N + 2))))
+    for i in (N-1):-1:1
+        out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i + 2))))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
+
 end
 
 """
@@ -298,19 +267,22 @@ function deleteat(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
     unsafe_deleteat(x, i)
 end
-unsafe_deleteat(x::OneItem, i::Int) = none
+unsafe_deleteat(x::Union{OneItem,ReverseOne}, i::Int) = nil
 @inline unsafe_deleteat(x::TwoItems, i::Int) = i === 1 ? tail(x) : list(first(x))
 @inline function unsafe_deleteat(x::StaticList, i::Int)
-    i === 1 ? tail(x) : cons(first(x), unsafe_deleteat(tail(x), i - 1))
-end
-@generated function unsafe_deleteat(x0::StaticList, ::StaticInt{N}) where {N}
-    out = ntails_expr(N)
-    r = :(Base.tail($(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
+    if i === 1
+        return tail(x)
+    else
+        return StaticList(first(x), unsafe_deleteat(tail(x), i - 1), slength(x) - ONE)
     end
-    push!(out.args, r)
-    return out
+end
+unsafe_deleteat(x::StaticList, i::StaticInt) = _delete(x, i, slength(x))
+@generated function _delete(x::StaticList, ::StaticInt{N}, ::StaticInt{L}) where {N,L}
+    out = ntails_expr(:x, N)
+    for i in (N-1):-1:1
+        out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i))))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
 end
 
 """
@@ -322,7 +294,7 @@ function popat(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
     unsafe_popat(x, i)
 end
-@inline unsafe_popat(x::OneItem, i::Int) = first(x), none
+@inline unsafe_popat(x::Union{OneItem,ReverseOne}, i::Int) = first(x), nil
 @inline function unsafe_popat(x::TwoItems, i::Int)
     i === 1 ? (first(x), tail(x)) : (last(x), list(first(x)))
 end
@@ -331,27 +303,23 @@ end
         return first(x), tail(x)
     else
         f, t = unsafe_popat(tail(x), i - 1)
-        return f, cons(first(x), t)
+        return f, StaticList(first(x), t, slength(x) - ONE)
     end
 end
-@generated function unsafe_popat(x0::StaticList, ::StaticInt{N}) where {N}
-    out = ntails_expr(N)
-    r = :(Base.tail($(Symbol(:x, N-1))))
-    for i in (N - 2):-1:0
-        r = :(cons(first($(Symbol(:x, i))), $r))
+unsafe_popat(x::StaticList, i::StaticInt) = _popat(x, i, slength(x))
+@generated function _popat(x::StaticList, ::StaticInt{N}, ::StaticInt{L}) where {N,L}
+    out = ntails_expr(:x, N)
+    for i in (N-1):-1:1
+        out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i))))
     end
-    push!(out.args, :(first($(Symbol(:x, N - 1))), $r))
-    return out
+    out = Expr(:tuple, _getexpr(:x, N), out)
+    Expr(:block, Expr(:meta, :inline), out)
 end
 
 ## findfirst
 @inline function Base.findfirst(f::Function, lst::StaticList)
     index = _findfirst(f, lst, slength(lst))
-    if index === 0
-        return nothing
-    else
-        return index
-    end
+    index === 0 ? nothing : index
 end
 @generated function _findfirst(f, x1::StaticList, ::StaticInt{N}) where {N}
     out = :0
@@ -361,9 +329,19 @@ end
     Expr(:block, Expr(:meta, :inline), Expr(:if, :(f(first(x1))), 1, out))
 end
 
-Base.show(io::IO, x::Union{ListType,Nil}) = show(io, MIME"text/plain"(), x)
-Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(io, "nil")
-@noinline function Base.show(io::IO, M::MIME"text/plain", x::ListType)
+Base.filter(f, ::Nil) = nil
+@inline function Base.filter(f, x::StaticList)
+    fst = first(x)
+    if f(fst)
+        y = filter(f, tail(x))
+        return StaticList(fst, y, slength(y) + ONE)
+    else
+        return filter(f, tail(x))
+    end
+end
+
+@noinline Base.show(io::IO, x::Union{StaticList,Nil}) = show(io, MIME"text/plain"(), x)
+@noinline function Base.show(io::IO, M::MIME"text/plain", x::Union{StaticList,Nil})
     str = "list("
     N = length(x)
     i = 1
@@ -376,7 +354,6 @@ Base.show(io::IO, ::MIME"text/plain", ::Nil) = print(io, "nil")
     end
     print(io, str * ")")
 end
-
 
 @specialize
 
