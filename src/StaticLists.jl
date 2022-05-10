@@ -223,12 +223,25 @@ end
     Expr(:block, Expr(:meta, :inline), out)
 end
 
-@inline function Base.accumulate(op, lst::StaticList; init=nil)
-    init === nil ? _accum(op, first(lst), tail(lst)) : _accum(op, init, lst)
-end
-_accum(op, prev, ::Nil) = list(prev)
-@inline function _accum(op, prev, x::StaticList)
-    StaticList(prev, _accum(op, op(prev, first(x)), tail(x)), slength(x))
+@inline Base.accumulate(op, x::StaticList; init=INIT) = _accum(op, x, init)
+@inline _accum(op, x::OneItem, ::Base._InitialValue) = x
+@inline _accum(op, x::StaticList, ::Base._InitialValue) = _accum(op, tail(x), first(x))
+@inline _accum(op, x::StaticList, init) = __accum(op, x, init, slength(x))
+@generated function __accum(op, x::StaticList, init, ::StaticInt{N}) where {N}
+    out = Expr(:block, Expr(:meta, :inline))
+    push!(out.args, Expr(:(=), :x1, :(op(init, $(_getexpr(:x, 1))))))
+    for i in 2:N
+        push!(out.args, Expr(:(=), Symbol(:x, i), :(op($(Symbol(:x, i - 1)), $(_getexpr(:x, 1))))))
+    end
+    lst = :nil
+    cnt = 1
+    for i in N:-1:1
+        lst = :(StaticList($(Symbol(:x, i)), $(lst), $(StaticInt(i))))
+        cnt += 1
+    end
+    lst = :(StaticList(init, $(lst), $(StaticInt(cnt))))
+    push!(out.args, lst)
+    out
 end
 
 """
