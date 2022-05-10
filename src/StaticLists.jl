@@ -15,8 +15,6 @@ struct Nil end
 
 const nil = Nil()
 
-@noinline Base.first(::Nil) = throw(ArgumentError("Cannot call first on an empty list"))
-@noinline Base.last(::Nil) = throw(ArgumentError("Cannot call last on an empty list"))
 @noinline Base.tail(::Nil) = throw(ArgumentError("Cannot call Base.tail on an empty list"))
 
 function ntails_expr(s::Union{Symbol,Expr}, N::Int)
@@ -38,16 +36,28 @@ const OneItem{T} = StaticList{T,Nil,StaticInt{1}}
 const TwoItems{T1,T2} = StaticList{T1,OneItem{T2},StaticInt{2}}
 const ReverseList{F,T,L} = Iterators.Reverse{StaticList{F,T,L}}
 const ReverseOne{T} = ReverseList{T,Nil,StaticInt{1}}
-
-@inline Base.first(x::StaticList) = getfield(x, :first)
+Base.parent(x::ReverseList) = getfield(x, 1)
 
 @inline Base.tail(x::StaticList) = @inbounds getfield(x, :tail)
 
-@inline Base.last(x::StaticList) = @inbounds(x[slength(x)])
+#########
+# first #
+#########
+@noinline Base.first(::Nil) = throw(ArgumentError("Cannot call first on an empty list"))
+@inline Base.first(x::StaticList) = getfield(x, :first)
+@inline Base.first(x::ReverseList) = last(parent(x))
 
+########
+# last #
+########
+@noinline Base.last(::Nil) = throw(ArgumentError("Cannot call last on an empty list"))
+@inline Base.last(x::StaticList) = @inbounds(x[slength(x)])
+@inline Base.last(x::ReverseList) = first(parent(x))
+
+Base.Iterators.reverse(x::StaticList) = Iterators.Reverse(x)
 Base.reverse(x::StaticList) = _reverse(x, slength(x))
 Base.collect(x::StaticList) = x
-Base.collect(x::ReverseList) = _reverse(getfield(x, 1), slength(x))
+@inline Base.collect(x::ReverseList) = _reverse(parent(x), slength(x))
 @generated function _reverse(x::StaticList, ::StaticInt{N}) where {N}
     out = Expr(:tuple)
     for i in N:-1:1
@@ -65,13 +75,9 @@ Base.only(x::OneItem) = first(x)
 @noinline Base.only(::Nil) = throw(ArgumentError("list is empty, must contain exactly 1 element"))
 
 Base.checkbounds(x::Union{StaticList,ReverseList}, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
-Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i::Integer) = 1 <= i <= slength(x)
-Base.checkbounds(::Type{Bool}, x::StaticList, i::AbstractUnitRange) = 1 <= first(i) && last(i) <= slength(x)
+Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i::Integer) = 1 <= i && i <= slength(x)
 
-
-function Base.get(x::Union{StaticList,ReverseList}, i::Integer, d)
-    checkbounds(Bool, x, i) ? @inbounds(x[i]) : d
-end
+Base.get(x::Union{StaticList,ReverseList}, i::Integer, d) = checkbounds(Bool, x, i) ? @inbounds(x[i]) : d
 Base.getindex(x::StaticList, ::Colon) = x
 function Base.getindex(x::StaticList, i::Integer)
     @boundscheck checkbounds(x, i)
@@ -81,11 +87,7 @@ end
 @generated function _getindex(x::StaticList, ::StaticInt{N}) where {N}
     Expr(:block, Expr(:meta, :inline), _getexpr(:x, N))
 end
-function Base.getindex(x::ReverseList, i::Integer)
-    @boundscheck checkbounds(x, i)
-    _getindex(getfield(x, 1), (slength(x) + ONE) - i)
-end
-
+@propagate_inbounds Base.getindex(x::ReverseList, i::Integer) = parent(x)[(slength(x) + ONE) - i]
 function Base.setindex(x::StaticList, v, i::Integer)
     @boundscheck checkbounds(x, i)
     return _setindex(x, v, i)
@@ -124,7 +126,10 @@ end
 
 Base.values(x::StaticList) = x
 
-Base.eltype(x::StaticList) = eltype(typeof(x))
+##########
+# eltype #
+##########
+Base.eltype(x::Union{StaticList,ReverseList,Nil}) = eltype(typeof(x))
 Base.eltype(::Type{Nil}) = Union{}
 Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
 Base.eltype(T::Type{<:TwoItems}) = typejoin(T.parameters[1], eltype(T.parameters[2]))
@@ -132,25 +137,15 @@ Base.eltype(T::Type{<:TwoItems}) = typejoin(T.parameters[1], eltype(T.parameters
     t = T.parameters[2]
     typejoin(typejoin(T.parameters[1], t.parameters[1]), eltype(t.parameters[2]))
 end
+Base.eltype(T::Type{<:ReverseList}) = eltype(T.parameters[1])
 
 ###
 # Comparison
 ###
 Base.:(==)(::Nil, ::Nil) = true
-function Base.:(==)(x::StaticList, y::StaticList)
-    if slength(x) === slength(y)
-        itrx = iterate(x)
-        itry = iterate(y)
-        while itrx !== nothing
-            itrx[1] == itry[1] || return false
-            itrx = iterate(x, itrx[2])
-            itry = iterate(y, itry[2])
-        end
-        return true
-    else
-        return false
-    end
-end
+@inline Base.:(==)(x::StaticList, y::StaticList) = slength(x) === slength(y) ? _iseq(x, y) : false
+_iseq(::Nil, ::Nil) = true
+@inline _iseq(x::StaticList, y::StaticList) = first(x) == first(y) ? _iseq(tail(x), tail(y)) : false
 
 Base.in(val, x::StaticList) = _findfirst(==(val), x, slength(x)) !== 0
 
@@ -161,7 +156,7 @@ Base.empty(::StaticList) = nil
 
 slength(::Nil) = StaticInt(0)
 slength(x::StaticList) = getfield(x, :length)
-slength(x::ReverseList) = slength(getfield(x, 1))
+slength(x::ReverseList) = slength(parent(x))
 @inline Base.length(x::Union{StaticList,Nil,ReverseList}) = Int(slength(x))
 Base.size(x::Union{StaticList,Nil}) = (length(x),)
 
@@ -170,11 +165,7 @@ Base.iterate(x::Union{StaticList,ReverseList}) = first(x), 2
 Base.iterate(::Union{OneItem,ReverseOne}, ::Int) = nothing
 @inline Base.iterate(x::TwoItems, s::Int) = s === 2 ? (first(tail(x)), 3) : nothing
 @inline function Base.iterate(x::Union{StaticList,ReverseList}, s::Int)
-    if s > length(x)
-        return nothing
-    else
-        return @inbounds(x[s]), s + 1
-    end
+    s > length(x) ? nothing : (@inbounds(x[s]), s + 1)
 end
 
 Base.map(f, ::Nil) = nil
@@ -268,7 +259,6 @@ unsafe_insert(x::StaticList, i::StaticInt, v) = _insert(x, i, slength(x), v)
         out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i + 2))))
     end
     Expr(:block, Expr(:meta, :inline), out)
-
 end
 
 """
@@ -325,8 +315,7 @@ unsafe_popat(x::StaticList, i::StaticInt) = _popat(x, i, slength(x))
     for i in (N-1):-1:1
         out = :(StaticList($(_getexpr(:x, i)), $(out), $(StaticInt(L - i))))
     end
-    out = Expr(:tuple, _getexpr(:x, N), out)
-    Expr(:block, Expr(:meta, :inline), out)
+    Expr(:block, Expr(:meta, :inline), Expr(:tuple, _getexpr(:x, N), out))
 end
 
 ## findfirst
@@ -353,7 +342,7 @@ Base.filter(f, ::Nil) = nil
     end
 end
 
-@noinline Base.show(io::IO, x::Union{StaticList,Nil}) = show(io, MIME"text/plain"(), x)
+@noinline Base.show(io::IO, x::Union{StaticList,Nil,ReverseList}) = show(io, MIME"text/plain"(), x)
 @noinline function Base.show(io::IO, M::MIME"text/plain", x::Union{StaticList,Nil})
     str = "list("
     N = length(x)
@@ -369,5 +358,8 @@ end
 end
 
 @specialize
+
+include("precompile.jl")
+_precompile_()
 
 end
