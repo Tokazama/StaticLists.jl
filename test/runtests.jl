@@ -40,6 +40,8 @@ lst = list(1, 2, 3, 4)
 @test @inferred(popat(lst, 3)) == (3, list(1, 2, 4))
 @test @inferred(popat(lst, static(3))) == (3, list(1, 2, 4))
 @test @inferred(map(i -> i + 1, lst)) == list(2, 3, 4, 5)
+@test @inferred(cumsum(lst)) == list(1, 3, 6, 10)
+@test @inferred(cumsum(list(1))) == list(1)
 
 @test foldr(=>, lst) == (1 => (2 => (3 => 4)))
 @test foldr(=>, lst; init=0) == (1 => (2 => (3 => (4 => 0))))

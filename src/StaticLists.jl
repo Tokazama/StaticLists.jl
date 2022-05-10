@@ -231,15 +231,15 @@ end
     out = Expr(:block, Expr(:meta, :inline))
     push!(out.args, Expr(:(=), :x1, :(op(init, $(_getexpr(:x, 1))))))
     for i in 2:N
-        push!(out.args, Expr(:(=), Symbol(:x, i), :(op($(Symbol(:x, i - 1)), $(_getexpr(:x, 1))))))
+        push!(out.args, Expr(:(=), Symbol(:x, i), :(op($(Symbol(:x, i - 1)), $(_getexpr(:x, i))))))
     end
     lst = :nil
     cnt = 1
     for i in N:-1:1
-        lst = :(StaticList($(Symbol(:x, i)), $(lst), $(StaticInt(i))))
+        lst = :(StaticList($(Symbol(:x, i)), $(lst), $(StaticInt(cnt))))
         cnt += 1
     end
-    lst = :(StaticList(init, $(lst), $(StaticInt(cnt))))
+    lst = :(StaticList(init, $(lst), $(StaticInt(N + 1))))
     push!(out.args, lst)
     out
 end
