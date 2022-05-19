@@ -6,7 +6,6 @@ using Static
 export deleteat, insert, list, popat
 
 const ONE = StaticInt(1)
-const IntType = Union{Int,StaticInt}
 
 @inline add1(N::Int) = N + 1
 @inline add1(::StaticInt{N}) where {N} = StaticInt(N + 1)
@@ -72,6 +71,14 @@ Base.reverse(x::ReverseList) = getfield(x, 1)
 ########
 @inline Base.last(x::StaticList) = @inbounds(x[slength(x)])
 @inline Base.last(x::ReverseList) = first(reverse(x))
+@inline Base.last(x::StaticList, n::StaticInt) = _last(x, n, x.length)
+@generated function _last(x::StaticList, n::StaticInt{N}, ::StaticInt{L}) where {N,L}
+    if 1 <= N && N <= L
+        Expr(:block, Expr(:meta, :inline), ntails_expr(:x, L - N))
+    else
+        :(throw(BoundsError(x, n)))
+    end
+end
 
 Base.Iterators.reverse(::Nil) = nil
 Base.Iterators.reverse(x::StaticList) = Iterators.Reverse(x)
@@ -99,6 +106,9 @@ Base.checkbounds(x::Union{StaticList,ReverseList}, i) = checkbounds(Bool, x, i) 
 @inline _checkbounds(::StaticInt{N}, i::Int) where {N} = 1 <= i && i <= N
 @inline _checkbounds(::StaticInt{N}, ::StaticInt{i}) where {N,i} = 1 <= i && i <= N
 
+############
+# getindex #
+############
 @inline function Base.get(x::Union{StaticList,ReverseList}, i::Integer, d)
     if checkbounds(Bool, x, i)
         return @inbounds(x[i])
@@ -124,6 +134,10 @@ end
 @propagate_inbounds function Base.getindex(x::ReverseList, i::Integer)
     reverse(x)[add1(slength(x)) - i]
 end
+
+############
+# setindex #
+############
 function Base.setindex(x::StaticList, v, i::Int)
     @boundscheck checkbounds(x, i)
     return _setindex(x, v, i)
