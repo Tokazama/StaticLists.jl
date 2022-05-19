@@ -60,10 +60,6 @@ show(io, list(1, 2, 3, 4))
 str = String(take!(io))
 @test str == "list(1, 2, 3, 4)"
 
-@test_throws ArgumentError first(nil)
-@test_throws ArgumentError last(nil)
-@test_throws ArgumentError tail(nil)
-
 # stacked indexing
 lens = accumulate(+, list(static(2), static(3), static(4), static(1)))
 
