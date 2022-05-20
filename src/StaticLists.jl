@@ -7,11 +7,8 @@ export deleteat, insert, list, popat
 
 const ONE = StaticInt(1)
 
-@inline add1(N::Int) = N + 1
-@inline add1(::StaticInt{N}) where {N} = StaticInt(N + 1)
-
-@inline sub1(N::Int) = N - 1
-@inline sub1(::StaticInt{N}) where {N} = StaticInt(N - 1)
+@inline inc(N::Int) = N + 1
+@inline inc(::StaticInt{N}) where {N} = StaticInt(N + 1)
 
 const INIT = Base._InitialValue()
 
@@ -25,21 +22,45 @@ const skippos = SkipPosition()
 
 @inline maybe_skip(f, x) = f(x) ? x : skippos
 
+@static if isdefined(Base, Symbol("@assume_effects"))
+    using Base: @assume_effects
+else
+    macro assume_effects(_, ex)
+        ex
+    end
+end
+
 @nospecialize
+
+@inline ntail(x, n::Int) = n < 1 ? x : ntail(tail(x), n - 1)
+@inline ntail(x, ::StaticInt{0}) = x
+@inline ntail(x, ::StaticInt{N}) where {N} = ntail(tail(x), StaticInt(N - 1))
 
 function ntails_expr(s::Union{Symbol,Expr}, N::Int)
     out = s
     for _ in 1:N
-        out = :(getfield($(out), 2))
+        out = :(Base.tail($(out)))
     end
     ifelse(N === 0, out, :(@inbounds($(out))))
 end
-_getexpr(s::Union{Symbol,Expr}, N::Int) = Expr(:call, :getfield, ntails_expr(s, N - 1), 1)
+_getexpr(s::Union{Symbol,Expr}, N::Int) = :(first($(ntails_expr(s, N - 1))))
 
 struct StaticList{F,T,L}
     first::F
     tail::T
     length::L
+end
+
+StaticList(x::StaticList) = x
+StaticList(x::Tuple) = _list(x, StaticInt(nfields(x)))
+@generated function _list(args::Tuple, ::StaticInt{N}) where {N}
+    out = :nil
+    itr = 0
+    for i in N:-1:1
+        itr += 1
+        out = :(StaticList(getfield(args, $(i)), $(out), $(StaticInt(itr))))
+    end
+    Expr(:block, Expr(:meta, :inline), out)
 end
 
 const OneItem{T} = StaticList{T,Nil,StaticInt{1}}
@@ -50,7 +71,16 @@ const ReverseOne{T} = ReverseList{T,Nil,StaticInt{1}}
 
 Base.reverse(x::ReverseList) = getfield(x, 1)
 
-@inline Base.tail(x::StaticList) = @inbounds getfield(x, :tail)
+@inline Base.tail(x::StaticList) = @inbounds(getfield(x, :tail))
+
+"""
+    list(args...)
+
+Composes a list where each argument is a member of the list.
+"""
+list(args...) = StaticList(args)
+
+Base.values(x::Union{StaticList,ReverseList}) = x
 
 #########
 # assoc #
@@ -58,7 +88,7 @@ Base.reverse(x::ReverseList) = getfield(x, 1)
 @inline assoc(::SkipPosition, ::Nil) = nil
 @inline assoc(::SkipPosition, y::StaticList) = y
 @inline assoc(x, ::Nil) = StaticList(x, nil, ONE)
-@inline assoc(x, y::StaticList) = StaticList(x, y, add1(y.length))
+@inline assoc(x, y::StaticList) = StaticList(x, y, inc(slength(y)))
 
 #########
 # first #
@@ -71,7 +101,7 @@ Base.reverse(x::ReverseList) = getfield(x, 1)
 ########
 @inline Base.last(x::StaticList) = @inbounds(x[slength(x)])
 @inline Base.last(x::ReverseList) = first(reverse(x))
-@inline Base.last(x::StaticList, n::StaticInt) = _last(x, n, x.length)
+@inline Base.last(x::StaticList, n::StaticInt) = _last(x, n, slength(x))
 @generated function _last(x::StaticList, n::StaticInt{N}, ::StaticInt{L}) where {N,L}
     if 1 <= N && N <= L
         Expr(:block, Expr(:meta, :inline), ntails_expr(:x, L - N))
@@ -79,6 +109,8 @@ Base.reverse(x::ReverseList) = getfield(x, 1)
         :(throw(BoundsError(x, n)))
     end
 end
+
+@inline Base.Iterators.peel(x::StaticList) = first(x), tail(x)
 
 Base.Iterators.reverse(::Nil) = nil
 Base.Iterators.reverse(x::StaticList) = Iterators.Reverse(x)
@@ -101,6 +133,9 @@ Base.IteratorSize(T::Type{Nil}) = Base.HasLength()
 Base.only(x::OneItem) = first(x)
 @noinline Base.only(x::StaticList) = throw(ArgumentError("list has multiple elements, must contain exactly 1 element"))
 
+###############
+# checkbounds #
+###############
 Base.checkbounds(x::Union{StaticList,ReverseList}, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
 @inline Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i) = _checkbounds(slength(x), i)
 @inline _checkbounds(::StaticInt{N}, i::Int) where {N} = 1 <= i && i <= N
@@ -123,7 +158,7 @@ function Base.getindex(x::StaticList, i::Int)
     return _getindex(x, i)
 end
 @inline _getindex(x::StaticList, i::Int) = i === 1 ? first(x) : _getindex(tail(x), i - 1)
-Base.getindex(x::StaticList, i::StaticInt) = _getindex(x, i, getfield(x, :length))
+Base.getindex(x::StaticList, i::StaticInt) = _getindex(x, i, slength(x))
 @generated function _getindex(x::StaticList, i::StaticInt{N}, ::StaticInt{L}) where {N,L}
     if 1 <= N && N <= L
         Expr(:block, Expr(:meta, :inline), _getexpr(:x, N))
@@ -132,7 +167,7 @@ Base.getindex(x::StaticList, i::StaticInt) = _getindex(x, i, getfield(x, :length
     end
 end
 @propagate_inbounds function Base.getindex(x::ReverseList, i::Integer)
-    reverse(x)[add1(slength(x)) - i]
+    reverse(x)[inc(slength(x)) - i]
 end
 
 ############
@@ -141,13 +176,6 @@ end
 function Base.setindex(x::StaticList, v, i::Int)
     @boundscheck checkbounds(x, i)
     return _setindex(x, v, i)
-end
-@inline function _setindex(x::StaticList, v, i::Int)
-    if i === 1
-        return StaticList(v, tail(x), slength(x))
-    else
-        return StaticList(first(x), _setindex(tail(x), v, i - 1), slength(x))
-    end
 end
 Base.setindex(x::StaticList, v, i::StaticInt) = _setindex(x, v, i, slength(x))
 @generated function _setindex(x::StaticList, v, i::StaticInt{N}, ::StaticInt{L}) where {N,L}
@@ -162,36 +190,35 @@ Base.setindex(x::StaticList, v, i::StaticInt) = _setindex(x, v, i, slength(x))
     end
 end
 
-"""
-    list(args...)
-
-Composes a list where each argument is a member of the list.
-"""
-list(args...) = _list(args, StaticInt(nfields(args)))
-@generated function _list(args::Tuple, ::StaticInt{N}) where {N}
-    out = :nil
-    itr = 0
-    for i in N:-1:1
-        itr += 1
-        out = :(StaticList(getfield(args, $(i)), $(out), $(StaticInt(itr))))
-    end
-    Expr(:block, Expr(:meta, :inline), out)
-end
-
-Base.values(x::Union{StaticList,ReverseList}) = x
-
 ##########
 # eltype #
 ##########
 Base.eltype(x::Union{StaticList,ReverseList,Nil}) = eltype(typeof(x))
 Base.eltype(::Type{Nil}) = Union{}
-Base.eltype(T::Type{<:OneItem}) = T.parameters[1]
-Base.eltype(T::Type{<:TwoItems}) = typejoin(T.parameters[1], eltype(T.parameters[2]))
-@inline function Base.eltype(T::Type{<:StaticList})
-    t = T.parameters[2]
-    typejoin(typejoin(T.parameters[1], t.parameters[1]), eltype(t.parameters[2]))
+Base.eltype(::Type{<:OneItem{T}}) where {T} = T
+@assume_effects :total function Base.eltype(T::Type{<:StaticList})
+    if isa(T, DataType)
+        t = T.parameters[2]
+        return typejoin(typejoin(T.parameters[1], t.parameters[1]), eltype(t.parameters[2]))
+    elseif isa(T, UnionAll)
+        return eltype(T.body)
+    elseif isa(T, Union)
+        return typejoin(eltype(T.a), eltype(T.b))
+    else
+        return Any
+    end
 end
-Base.eltype(T::Type{<:ReverseList}) = eltype(T.parameters[1])
+@assume_effects :total function Base.eltype(T::Type{<:ReverseList})
+    if isa(T, DataType)
+        return eltype(T.parameters[1])
+    elseif isa(T, UnionAll)
+        return eltype(T.body)
+    elseif isa(T, Union)
+        return typejoin(eltype(T.a), eltype(T.b))
+    else
+        return Any
+    end
+end
 
 ###
 # Comparison
@@ -200,7 +227,9 @@ Base.eltype(T::Type{<:ReverseList}) = eltype(T.parameters[1])
     slength(x) === slength(y) ? _iseq(x, y) : false
 end
 _iseq(::Nil, ::Nil) = true
-@inline _iseq(x::StaticList, y::StaticList) = first(x) == first(y) ? _iseq(tail(x), tail(y)) : false
+@inline function _iseq(x::StaticList, y::StaticList)
+    first(x) == first(y) ? _iseq(tail(x), tail(y)) : false
+end
 
 Base.in(val, x::StaticList) = _findfirst(==(val), x, slength(x)) !== 0
 
@@ -239,7 +268,9 @@ _is_init(::Base._InitialValue) = True()
 _is_init(x) = False()
 
 # TODO errors on Nil
-@inline Base.mapfoldl(f, op, x::StaticList; init=INIT) = _mapfoldl(f, op, x, init, _is_init(init), slength(x))
+@inline function Base.mapfoldl(f, op, x::StaticList; init=INIT)
+    _mapfoldl(f, op, x, init, _is_init(init), slength(x))
+end
 @generated function _mapfoldl(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
     if IsInit <: True
         out = :(f(first(x)))
@@ -254,7 +285,9 @@ _is_init(x) = False()
     Expr(:block, Expr(:meta, :inline), out)
 end
 
-@inline Base.mapfoldr(f, op, x::StaticList; init=INIT) = _mapfoldr(f, op, x, init, _is_init(init), slength(x))
+@inline function Base.mapfoldr(f, op, x::StaticList; init=INIT)
+    _mapfoldr(f, op, x, init, _is_init(init), slength(x))
+end
 @generated function _mapfoldr(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
     if IsInit <: True
         out = :(f($(_getexpr(:x, N))))
@@ -373,6 +406,11 @@ popat(x::StaticList, i::StaticInt) = _popat(x, i, slength(x))
     end
 end
 
+Base.filter(f, ::Nil) = nil
+@inline function Base.filter(f, x::StaticList)
+    _mapfoldr(Base.Fix1(maybe_skip, f), assoc, x, nil, False(), slength(x))
+end
+
 ## findfirst
 @inline function Base.findfirst(f::Function, lst::StaticList)
     index = _findfirst(f, lst, slength(lst))
@@ -386,15 +424,8 @@ end
     Expr(:block, Expr(:meta, :inline), Expr(:if, :(f(first(x1))), 1, out))
 end
 
-Base.filter(f, ::Nil) = nil
-@inline function Base.filter(f, x::StaticList)
-    _mapfoldr(Base.Fix1(maybe_skip, f), assoc, x, nil, False(), x.length)
-end
-
-@noinline function Base.show(io::IO, x::Union{StaticList,Nil,ReverseList})
-    show(io, MIME"text/plain"(), x)
-end
-@noinline function Base.show(io::IO, M::MIME"text/plain", x::Union{StaticList,Nil})
+@noinline Base.show(io::IO, x::Union{StaticList,Nil}) = show(io, MIME"text/plain"(), x)
+@noinline function Base.show(io::IO, ::MIME"text/plain", x::Union{StaticList,Nil})
     str = "list("
     N = length(x)
     i = 1
@@ -409,5 +440,13 @@ end
 end
 
 @specialize
+
+@inline function _setindex(x::StaticList, v, i::Int)
+    if i === 1
+        return StaticList(v, tail(x), slength(x))
+    else
+        return StaticList(first(x), _setindex(tail(x), v, i - 1), slength(x))
+    end
+end
 
 end
