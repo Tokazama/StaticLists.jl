@@ -3,7 +3,7 @@ module StaticLists
 using Base: @propagate_inbounds, tail, setindex
 using Static
 
-export deleteat, insert, list, popat
+export StaticList, deleteat, insert, list, popat
 
 const ONE = StaticInt(1)
 
@@ -22,28 +22,16 @@ const skippos = SkipPosition()
 
 @inline maybe_skip(f, x) = f(x) ? x : skippos
 
-@static if isdefined(Base, Symbol("@assume_effects"))
-    using Base: @assume_effects
-else
-    macro assume_effects(_, ex)
-        ex
-    end
-end
-
 @nospecialize
-
-@inline ntail(x, n::Int) = n < 1 ? x : ntail(tail(x), n - 1)
-@inline ntail(x, ::StaticInt{0}) = x
-@inline ntail(x, ::StaticInt{N}) where {N} = ntail(tail(x), StaticInt(N - 1))
 
 function ntails_expr(s::Union{Symbol,Expr}, N::Int)
     out = s
     for _ in 1:N
-        out = :(Base.tail($(out)))
+        out = :(getfield($(out), 2))
     end
-    ifelse(N === 0, out, :(@inbounds($(out))))
+    out
 end
-_getexpr(s::Union{Symbol,Expr}, N::Int) = :(first($(ntails_expr(s, N - 1))))
+_getexpr(s::Union{Symbol,Expr}, N::Int) = :(getfield($(ntails_expr(s, N - 1)), 1))
 
 struct StaticList{F,T,L}
     first::F
@@ -71,7 +59,7 @@ const ReverseOne{T} = ReverseList{T,Nil,StaticInt{1}}
 
 Base.reverse(x::ReverseList) = getfield(x, 1)
 
-@inline Base.tail(x::StaticList) = @inbounds(getfield(x, :tail))
+@inline Base.tail(x::StaticList) = getfield(x, :tail)
 
 """
     list(args...)
@@ -136,8 +124,12 @@ Base.only(x::OneItem) = first(x)
 ###############
 # checkbounds #
 ###############
-Base.checkbounds(x::Union{StaticList,ReverseList}, i) = checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
-@inline Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i) = _checkbounds(slength(x), i)
+function Base.checkbounds(x::Union{StaticList,ReverseList}, i)
+    checkbounds(Bool, x, i) ? nothing : throw(BoundsError(x, i))
+end
+@inline function Base.checkbounds(::Type{Bool}, x::Union{StaticList,ReverseList}, i)
+    _checkbounds(slength(x), i)
+end
 @inline _checkbounds(::StaticInt{N}, i::Int) where {N} = 1 <= i && i <= N
 @inline _checkbounds(::StaticInt{N}, ::StaticInt{i}) where {N,i} = 1 <= i && i <= N
 
@@ -195,30 +187,12 @@ end
 ##########
 Base.eltype(x::Union{StaticList,ReverseList,Nil}) = eltype(typeof(x))
 Base.eltype(::Type{Nil}) = Union{}
-Base.eltype(::Type{<:OneItem{T}}) where {T} = T
-@assume_effects :total function Base.eltype(T::Type{<:StaticList})
-    if isa(T, DataType)
-        t = T.parameters[2]
-        return typejoin(typejoin(T.parameters[1], t.parameters[1]), eltype(t.parameters[2]))
-    elseif isa(T, UnionAll)
-        return eltype(T.body)
-    elseif isa(T, Union)
-        return typejoin(eltype(T.a), eltype(T.b))
-    else
-        return Any
-    end
+Base.eltype(T::Type{<:OneItem}) = fieldtype(T, 1)
+@inline function Base.eltype(T::Type{<:StaticList})
+    t = fieldtype(T, 2)
+    typejoin(fieldtype(T, 1), typejoin(fieldtype(t, 1), eltype(fieldtype(t, 2))))
 end
-@assume_effects :total function Base.eltype(T::Type{<:ReverseList})
-    if isa(T, DataType)
-        return eltype(T.parameters[1])
-    elseif isa(T, UnionAll)
-        return eltype(T.body)
-    elseif isa(T, Union)
-        return typejoin(eltype(T.a), eltype(T.b))
-    else
-        return Any
-    end
-end
+Base.eltype(T::Type{<:ReverseList}) = eltype(fieldtype(T, 1))
 
 ###
 # Comparison
@@ -254,7 +228,7 @@ end
 
 Base.map(f, ::Nil) = nil
 @inline Base.map(f, x::StaticList) = _genmap(f, x, slength(x))
-@generated function _genmap(f, x::StaticList, ::StaticInt{N}) where {N}
+@generated function _genmap(f::F, x::StaticList, ::StaticInt{N}) where {F,N}
     out = :nil
     cnt = 1
     for i in N:-1:1
@@ -268,10 +242,10 @@ _is_init(::Base._InitialValue) = True()
 _is_init(x) = False()
 
 # TODO errors on Nil
-@inline function Base.mapfoldl(f, op, x::StaticList; init=INIT)
+@inline function Base.mapfoldl(f::F, op::O, x::StaticList; init=INIT) where {F,O}
     _mapfoldl(f, op, x, init, _is_init(init), slength(x))
 end
-@generated function _mapfoldl(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
+@generated function _mapfoldl(f::F, op::O, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {F,O,IsInit,N}
     if IsInit <: True
         out = :(f(first(x)))
         idx = 2
@@ -285,10 +259,10 @@ end
     Expr(:block, Expr(:meta, :inline), out)
 end
 
-@inline function Base.mapfoldr(f, op, x::StaticList; init=INIT)
+@inline function Base.mapfoldr(f::F, op::O, x::StaticList; init=INIT) where {F,O}
     _mapfoldr(f, op, x, init, _is_init(init), slength(x))
 end
-@generated function _mapfoldr(f, op, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {IsInit,N}
+@generated function _mapfoldr(f::F, op::O, x::StaticList, init, ::IsInit, ::StaticInt{N}) where {F,O,IsInit,N}
     if IsInit <: True
         out = :(f($(_getexpr(:x, N))))
         idx = N - 1
@@ -306,7 +280,7 @@ end
 @inline _accum(op, x::OneItem, ::Base._InitialValue) = x
 @inline _accum(op, x::StaticList, ::Base._InitialValue) = _accum(op, tail(x), first(x))
 @inline _accum(op, x::StaticList, init) = __accum(op, x, init, slength(x))
-@generated function __accum(op, x::StaticList, init, ::StaticInt{N}) where {N}
+@generated function __accum(op::O, x::StaticList, init, ::StaticInt{N}) where {O,N}
     out = Expr(:block, Expr(:meta, :inline))
     push!(out.args, Expr(:(=), :x1, :(op(init, $(_getexpr(:x, 1))))))
     for i in 2:N
@@ -407,7 +381,7 @@ popat(x::StaticList, i::StaticInt) = _popat(x, i, slength(x))
 end
 
 Base.filter(f, ::Nil) = nil
-@inline function Base.filter(f, x::StaticList)
+@inline function Base.filter(f::F, x::StaticList) where {F}
     _mapfoldr(Base.Fix1(maybe_skip, f), assoc, x, nil, False(), slength(x))
 end
 
